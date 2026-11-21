@@ -19,7 +19,7 @@ private:
     int exposure;
     int gain;
     std::string serial_number;
-    rm::HikCamera* cap;
+    rm::HikCamera* cap = nullptr;
     
     // 成员函数声明
     void loadCameraConfig();
@@ -31,6 +31,7 @@ private:
 public:
     Camera_();
     ~Camera_();
+    bool isOpened() const;
     void getimage(cv::Mat &image);
     void setCameraExposureGain(int exp, int g);
 };

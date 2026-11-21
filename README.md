@@ -23,36 +23,22 @@
 ## 文件结构
 
 ```text
-26new飞镖/
-├── main.cpp
-├── CMakeLists.txt
-├── build_and_run.sh
-├── watchdog.sh
-├── config/
-│   └── debug.yaml
-├── CameraDriver/
-│   ├── HaiKang.h
-│   └── HaiKang.cpp
-├── Communication/
-│   ├── VirtualSerial.h / .cpp
-│   ├── ByteConverter.h / .cpp
-│   ├── CRC16.hpp
-│   └── CRC16.cpp
-├── ImgProcessing/
-│   ├── GreenDetect.h
-│   └── GreenDetect.cpp
-├── Tool/
-│   ├── Utils.h
-│   └── Utils.cpp
-├── camera/
-├── SDK/                  # 本地放置 MVS SDK，不随仓库分发
-├── test/
-│   └── test_green_detect.cpp
-└── logs/                  # 运行时自动生成
+├── src/                  # 应用入口与模块组合
+├── io/                   # 海康相机与串口
+├── tasks/dart/           # 绿灯识别
+├── debug/                # 录制、参数、调试数据发布
+│   └── web/              # Flask 实时调试和回放
+├── tools/                # 通用工具及调试辅助脚本
+├── config/debug.yaml     # 唯一配置文件
+├── tests/                # 测试程序
+├── camera/               # 保留的 RMVL 相机代码
+├── SDK/                  # 本地 MVS SDK，不随仓库分发
+├── run_web_debug.sh
+└── CMakeLists.txt
 ```
 
-> **公开版本说明**：本仓库不包含 `SDK/`（海康专有 SDK）、`test/test.png`（实拍测试图）、
-> `CameraDriver/docs/相机启动流程.png`（第三方博客截图）、`build/`、`logs/`。
+> **公开版本说明**：本仓库不包含 `SDK/`（海康专有 SDK）、`tests/test.png`（实拍测试图）、
+> `io/camera/docs/相机启动流程.png`（第三方博客截图）、`build/`、`logs/`。
 > 具体忽略规则见 `.gitignore`，SDK 获取方式见文末「依赖」。
 
 ## 编译和运行
@@ -178,7 +164,7 @@ cp MVS/Development/lib/64/libMvCameraControl.so SDK/lib/
 | 组件 | 位置 | 保留的版权声明 | 许可证情况 |
 |---|---|---|---|
 | RMVL 相机库（裁剪快照） | `camera/` | RoboMaster Vision Community (2021/2023)、RMVL Community (2024)、zhaoxi (2023) | 仓库内**未附**许可证全文（见下方说明） |
-| CRC16 校验 | `Communication/CRC16.*` | Copyright (c) 2022 ChenJun | Apache-2.0（源码头声明） |
+| CRC16 校验 | `io/serial/CRC16.*` | Copyright (c) 2022 ChenJun | Apache-2.0（源码头声明） |
 | 海康威视 MVS SDK | `SDK/`（不随仓库分发） | 海康机器人 | 专有软件 |
 
 > **说明**：`camera/` 为 RMVL 社区相机库的裁剪快照，文件头保留了原作者与版权年份；仓库内未附带该组件的许可证全文，对外分发前请与上游项目确认。**本项目未自行选择或变更项目整体的开源许可证。**

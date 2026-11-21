@@ -89,6 +89,7 @@ bool Camera_::createCameraHandle()
 
 bool Camera_::setCameraParameters()
 {
+    if (cap == nullptr || !cap->isOpened()) return false;
     try
     {
         cap->set(rm::CAMERA_MANUAL_EXPOSURE);
@@ -100,6 +101,11 @@ bool Camera_::setCameraParameters()
     {
         return false;
     }
+}
+
+bool Camera_::isOpened() const
+{
+    return cap != nullptr && cap->isOpened();
 }
 
 void Camera_::setupDebugMode()

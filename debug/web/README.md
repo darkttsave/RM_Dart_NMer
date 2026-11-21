@@ -84,7 +84,7 @@
 - **底部**：播放 / 暂停、逐帧前后、±1 s、播放速度、按帧号定位、**统一时间轴（始终可见）**；
 - **视频定位始终使用 `video_index_001.csv` 的实际帧时间索引，不使用视频标称 FPS。**
 
-界面样式集中在 `web_debug/static/dashboard.css`（两个页面共用，保证录制/回放视觉一致）。
+界面样式集中在 `debug/web/static/dashboard.css`（两个页面共用，保证录制/回放视觉一致）。
 
 ### 2.3 机械与电控调试台（`/mechanical`，M4）
 
@@ -330,10 +330,10 @@ video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
 
 ```bash
 # 直接打开某个会话（可复制到任意目录/另一台电脑）
-python3 web_debug/playback.py --dir recordings/2026-11-21_10-38-55 --port 5001
+python3 debug/web/playback.py --dir recordings/2026-11-21_10-38-55 --port 5001
 
 # 或列出会话根目录下的所有会话
-python3 web_debug/playback.py --root recordings --port 5001
+python3 debug/web/playback.py --root recordings --port 5001
 ```
 
 功能（显示逻辑参考 Misaka 后续改动的回放页面，独立实现）：
@@ -418,20 +418,20 @@ python3 web_debug/playback.py --root recordings --port 5001
 
 ```bash
 # M1 实时链路（视觉程序 + Flask 都在运行）：期望 20/20
-python3 test/test_web_debug_checks.py
+python3 tests/test_web_debug_checks.py
 
 # M2 录制性能对照（三种配置：不录制不预览 / 仅录制 / 录制+预览）
-python3 test/test_recording_bench.py --seconds 20
-python3 test/test_recording_bench.py --seconds 20 --configs record_with_preview --flask
+python3 tests/test_recording_bench.py --seconds 20
+python3 tests/test_recording_bench.py --seconds 20 --configs record_with_preview --flask
 
 # 离线降级（只启动 Flask）
-python3 test/test_web_debug_checks.py --offline
+python3 tests/test_web_debug_checks.py --offline
 
 # M4 双工作台与偏差标柱回归（需要 main + Flask + 回放服务运行中）
 NODE_PATH=$(npm root -g) node tools/regression_m4.js http://127.0.0.1:5000/ http://127.0.0.1:5001/ /tmp/m4ui
 
 # M3 参数管理自检（需要 main + Flask 运行中；保存测试请用隔离配置副本）
-python3 test/test_m3_params.py --config /tmp/m3test/config/debug.yaml --session /tmp/m3test/recordings/<会话>
+python3 tests/test_m3_params.py --config /tmp/m3test/config/debug.yaml --session /tmp/m3test/recordings/<会话>
 NODE_PATH=$(npm root -g) node tools/regression_m3.js http://127.0.0.1:5000/ http://127.0.0.1:5001/ /tmp/m3ui
 
 # M2-UI 页面截图与功能回归（需要实时 Flask + 回放服务都在运行）

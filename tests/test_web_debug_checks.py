@@ -12,8 +12,8 @@ M1 Web 调试链路自检脚本（本地验证用）
 6. 无视觉程序时 stale 判定正确（可单独运行 --offline）。
 
 用法：
-    python3 test/test_web_debug_checks.py --base http://127.0.0.1:5000 --samples 120
-    python3 test/test_web_debug_checks.py --offline     # 在后端未接视觉程序时验证降级
+    python3 tests/test_web_debug_checks.py --base http://127.0.0.1:5000 --samples 120
+    python3 tests/test_web_debug_checks.py --offline     # 在后端未接视觉程序时验证降级
 """
 
 import argparse

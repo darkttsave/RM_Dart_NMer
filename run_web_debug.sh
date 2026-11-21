@@ -9,7 +9,7 @@
 #   ./run_web_debug.sh --auto-record          # 实时预览 + 启动即开始录制
 #   ./run_web_debug.sh --record-only          # 无预览录制：不启动预览界面，按配置参数自动录制
 #   ./run_web_debug.sh --source synthetic     # 无相机：合成绿色引导灯视频源
-#   ./run_web_debug.sh --source image:test/test.png --no-serial --no-gui
+#   ./run_web_debug.sh --source image:tests/test.png --no-serial --no-gui
 #   ./run_web_debug.sh --no-record            # 关闭录制
 #   ./run_web_debug.sh --backend-only         # 只启动 Flask（视觉程序另行启动）
 #   ./run_web_debug.sh --replay               # 只启动 M2 离线回放（默认 recordings/）
@@ -142,7 +142,7 @@ if [ "$REPLAY" -eq 1 ]; then
         PLAYBACK_ARGS=(--root "$ROOT_DIR/recordings")
     fi
     echo "[run_web_debug] 启动 M2 离线回放: http://$WEB_HOST:$REPLAY_PORT/ (会话: ${PLAYBACK_ARGS[*]})"
-    exec python3 "$ROOT_DIR/web_debug/playback.py" \
+    exec python3 "$ROOT_DIR/debug/web/playback.py" \
         --host "$WEB_HOST" --port "$REPLAY_PORT" \
         --live-url "http://$WEB_HOST:$WEB_PORT/" "${PLAYBACK_ARGS[@]}"
 fi
@@ -178,7 +178,7 @@ fi
 
 # ---- 1. 启动 Flask 调试后端 ----
 echo "[run_web_debug] 启动调试后端: http://$WEB_HOST:$WEB_PORT/ (数据口 $DATA_HOST:$DATA_PORT)"
-python3 "$ROOT_DIR/web_debug/app.py" \
+python3 "$ROOT_DIR/debug/web/app.py" \
     --host "$WEB_HOST" --port "$WEB_PORT" \
     --data-host "$DATA_HOST" --data-port "$DATA_PORT" \
     --playback-url "http://$WEB_HOST:$REPLAY_PORT/" \

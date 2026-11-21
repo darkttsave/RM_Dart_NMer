@@ -20,9 +20,9 @@ need_build=true
 if [ -f "main" ]; then
     # 如果有可执行文件，检查源文件是否更新
     if [ "../CMakeLists.txt" -ot "main" ] && \
-       [ "../main.cpp" -ot "main" ] && \
-       [ -d "../ImgProcessing" ] && \
-       [ -d "../Communication" ]; then
+       [ "../src/main.cpp" -ot "main" ] && \
+       [ -d "../tasks/dart" ] && \
+       [ -d "../io/serial" ]; then
         need_build=false
         echo "可执行文件是最新的，跳过编译"
     fi

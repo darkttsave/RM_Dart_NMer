@@ -14,7 +14,7 @@ M1 Web 调试后端（Flask）
   都只会让 C++ 侧丢弃调试帧，不会阻塞视觉线程，也不会产生任何控制指令。
 - 本文件只做"接收 -> 缓存 -> 转发"，不修改原始数据，不向下位机发送任何内容。
 
-帧格式（与 web_debug/DebugTelemetry.cpp 一致，小端）：
+帧格式（与 debug/DebugTelemetry.cpp 一致，小端）：
     magic[4]="DWDB" | version u8 | flags u8 | reserved u16
     | json_len u32 | jpeg_len u32 | json bytes | jpeg bytes
 """
@@ -541,7 +541,7 @@ def _service_info():
         # M2 已实现：录制控制（转发到 C++ 本机控制口）；其余仍预留
         "m2": {
             "recorder": "/api/recorder (GET 状态 / POST start|stop)",
-            "playback": "独立回放服务 web_debug/playback.py（--dir/--root）",
+            "playback": "独立回放服务 debug/web/playback.py（--dir/--root）",
         },
         "m3": {
             "params": "/api/params (GET 运行参数/配置值 / POST apply|save)",

@@ -22,14 +22,14 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
-#include "CameraDriver/HaiKang.h"
-#include "Communication/VirtualSerial.h"
-#include "ImgProcessing/GreenDetect.h"
-#include "Tool/Utils.h"
-#include "web_debug/DebugTelemetry.h"
-#include "web_debug/FrameSource.h"
-#include "web_debug/Recorder.h"
-#include "web_debug/RuntimeParams.h"
+#include "io/camera/HaiKang.h"
+#include "io/serial/VirtualSerial.h"
+#include "tasks/dart/GreenDetect.h"
+#include "tools/Utils.h"
+#include "debug/DebugTelemetry.h"
+#include "debug/FrameSource.h"
+#include "debug/Recorder.h"
+#include "debug/RuntimeParams.h"
 
 using namespace cv;
 using namespace std;
@@ -355,6 +355,7 @@ int main(int argc, char **argv)
     const auto logRootDir = projectRootDir / "logs";
     const auto runLogDir = logRootDir / runTimestamp;
     std::filesystem::create_directories(runLogDir);
+    pruneRunLogs(logRootDir, runLogDir);
 
     setupTerminalLogCapture(runLogDir / "startup_terminal.log", terminalLogLineLimit);
 

@@ -10,7 +10,7 @@
   E. 事件一致性：录制会话 events.jsonl 的 elapsed_us / frame_id 与遥测 CSV 对齐
 
 用法：
-    python3 test/test_m3_params.py --config /tmp/m3test/config/debug.yaml \
+    python3 tests/test_m3_params.py --config /tmp/m3test/config/debug.yaml \
         --session /tmp/m3test/recordings/<会话> [--base http://127.0.0.1:5000]
 
 说明：

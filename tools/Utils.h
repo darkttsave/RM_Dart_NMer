@@ -20,6 +20,9 @@ namespace fs = std::filesystem;
  */
 std::string makeRunTimestamp();
 
+/** 保留当前运行目录及最近的运行日志目录；其他目录不参与清理。 */
+void pruneRunLogs(const fs::path &logRoot, const fs::path &currentRun, std::size_t limit = 12);
+
 /**
  * @brief 解析项目根目录
  * @param loadedConfigPath 已加载的配置文件路径

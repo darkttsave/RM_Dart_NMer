@@ -6,6 +6,7 @@
  */
 
 #include "Utils.h"
+#include <algorithm>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <sstream>
 #include <streambuf>
+#include <vector>
 
 namespace
 {
@@ -97,6 +99,46 @@ std::string makeRunTimestamp()
     std::ostringstream oss;
     oss << std::put_time(&localTime, "%y%m%d%H%M");
     return oss.str();
+}
+
+void pruneRunLogs(const fs::path &logRoot, const fs::path &currentRun, std::size_t limit)
+{
+    std::error_code ec;
+    std::vector<fs::path> runs;
+    fs::directory_iterator it(logRoot, ec), end;
+    for (; !ec && it != end; it.increment(ec))
+    {
+        const auto &entry = *it;
+        const std::string name = entry.path().filename().string();
+        std::error_code typeError;
+        const auto status = entry.symlink_status(typeError);
+        if (!typeError && fs::is_directory(status) && name.size() == 10 &&
+            std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            runs.push_back(entry.path());
+    }
+    if (ec)
+    {
+        std::cerr << "[RunLog] Warning: cannot list log directories: " << ec.message() << std::endl;
+        return;
+    }
+    std::sort(runs.begin(), runs.end(), std::greater<fs::path>());
+    std::size_t kept = 0;
+    const auto currentName = currentRun.filename();
+    const bool hasCurrent = std::any_of(runs.begin(), runs.end(), [&](const fs::path &p) {
+        return p.filename() == currentName;
+    });
+    if (hasCurrent) ++kept;
+    for (const auto &path : runs)
+    {
+        if (path.filename() == currentName) continue;
+        if (kept < limit) { ++kept; continue; }
+        fs::remove_all(path, ec);
+        if (ec)
+        {
+            std::cerr << "[RunLog] Warning: cannot remove " << path << ": " << ec.message() << std::endl;
+            ec.clear();
+        }
+    }
 }
 
 fs::path resolveProjectRoot(const std::string &loadedConfigPath)

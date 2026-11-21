@@ -12,7 +12,7 @@ M2 录制性能对照测试（测试 B）
       CPU（单核百分比）、RSS，以及会话目录与 session.json 完整性。
 
 用法：
-    python3 test/test_recording_bench.py [--seconds 20] [--skip-baseline]
+    python3 tests/test_recording_bench.py [--seconds 20] [--skip-baseline]
 """
 
 import argparse
@@ -179,7 +179,7 @@ def main():
     if args.flask:
         flask_log = open(os.path.join(LOG_DIR, "bench_flask.log"), "w", encoding="utf-8")
         flask_proc = subprocess.Popen(
-            [sys.executable, os.path.join(ROOT, "web_debug", "app.py"),
+            [sys.executable, os.path.join(ROOT, "debug", "web", "app.py"),
              "--host", "127.0.0.1", "--port", "5000",
              "--data-host", "127.0.0.1", "--data-port", "5010"],
             cwd=ROOT, stdout=flask_log, stderr=subprocess.STDOUT,

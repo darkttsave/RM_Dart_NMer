@@ -11,8 +11,8 @@ M2 离线回放服务（独立 Flask 进程）
 - 只读：不驱动任何视觉/控制链路。
 
 启动：
-    python3 web_debug/playback.py --dir recordings/2026-11-21_10-31-51 --port 5001
-    python3 web_debug/playback.py --root recordings --port 5001      # 从会话列表选择
+    python3 debug/web/playback.py --dir recordings/2026-11-21_10-31-51 --port 5001
+    python3 debug/web/playback.py --root recordings --port 5001      # 从会话列表选择
 
 依赖：Python 3、Flask、OpenCV（python3-opencv / opencv-python）
 """
@@ -575,7 +575,7 @@ def main():
             return 1
     else:
         # 默认使用项目下 recordings/
-        default_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "recordings")
+        default_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "recordings")
         CONFIG["root"] = default_root
         if not os.path.isdir(default_root):
             print(f"[playback] 警告: 默认会话根目录不存在: {default_root}")

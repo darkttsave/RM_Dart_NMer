@@ -14,10 +14,10 @@ logs/
 SDK/
 
 # ---- 未经授权的第三方文档截图（CSDN 博客）----
-CameraDriver/docs/相机启动流程.png
+io/camera/docs/相机启动流程.png
 
 # ---- 实拍测试图片（不公开）----
-test/test.png
+tests/test.png
 
 # ---- Python 缓存 ----
 __pycache__/
