@@ -106,6 +106,56 @@ std::string extractJsonString(const std::string &json, const std::string &key)
     return out;
 }
 
+/** 提取 JSON 中某个键对应的对象字面量（如 {"values":{...}} 中的 {...}） */
+std::string extractJsonObject(const std::string &json, const std::string &key)
+{
+    const std::string pattern = "\"" + key + "\"";
+    std::size_t pos = json.find(pattern);
+    if (pos == std::string::npos)
+        return "{}";
+    pos = json.find(':', pos + pattern.size());
+    if (pos == std::string::npos)
+        return "{}";
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' ||
+                                 json[pos] == '\r'))
+        ++pos;
+    if (pos >= json.size() || json[pos] != '{')
+        return "{}";
+    const std::size_t start = pos;
+    int depth = 0;
+    bool in_string = false;
+    for (; pos < json.size(); ++pos)
+    {
+        const char c = json[pos];
+        if (in_string)
+        {
+            if (c == '\\')
+            {
+                ++pos;
+                continue;
+            }
+            if (c == '"')
+                in_string = false;
+            continue;
+        }
+        if (c == '"')
+        {
+            in_string = true;
+            continue;
+        }
+        if (c == '{')
+            ++depth;
+        else if (c == '}')
+        {
+            --depth;
+            if (depth == 0)
+                return json.substr(start, pos - start + 1);
+        }
+    }
+    return "{}";
+}
+
 bool writeLine(int fd, const std::string &line)
 {
     const std::string data = line + "\n";
@@ -165,7 +215,7 @@ void Recorder::start()
         control_running_.store(true);
         control_thread_ = std::thread(&Recorder::controlLoop, this);
         std::cout << "[Recorder] 本机录制控制口: tcp://127.0.0.1:" << options_.control_port
-                  << " (status/start/stop)" << std::endl;
+                  << " (status/start/stop/params/params.apply/params.save)" << std::endl;
     }
 
     if (options_.auto_start)
@@ -260,14 +310,20 @@ void Recorder::copyConfigSnapshot()
         }
     }
 
+    // M3：优先取参数服务当前运行值（网页可能已修改）；否则回退启动时生成的快照字符串
+    std::string runtime_json = options_.runtime_params_json;
+    if (runtime_params_)
+        runtime_json = runtime_params_->runningJson();
+    if (runtime_json.empty())
+        runtime_json = "{}";
+
     std::ofstream out(snapshot_dir / "runtime_params.json");
     if (out.is_open())
     {
         out << "{\n"
             << "  \"note\": \"运行时实际生效参数快照（来自主程序变量），与 config_snapshot/debug.yaml "
                "的磁盘配置可能不同\",\n"
-            << "  \"params\": " << (options_.runtime_params_json.empty() ? "{}" : options_.runtime_params_json)
-            << "\n}\n";
+            << "  \"params\": " << runtime_json << "\n}\n";
         out.close();
     }
     else
@@ -345,9 +401,19 @@ bool Recorder::startSession(const std::string &reason)
         }
 
         video_path_ = (fs::path(session_dir_) / "debug_001.avi").string();
+        events_path_ = (fs::path(session_dir_) / "events.jsonl").string();
     }
 
     copyConfigSnapshot();
+
+    // M3：参数事件文件（追加写入；无参数修改时为空文件）
+    {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+        events_file_.open(events_path_, std::ios::out | std::ios::trunc);
+        parameter_events_.store(0);
+        if (!events_file_.is_open())
+            recordError("events.jsonl 打开失败: " + events_path_);
+    }
 
     {
         std::lock_guard<std::mutex> lock(telemetry_mutex_);
@@ -404,6 +470,16 @@ void Recorder::stopSession(const std::string &reason)
         telemetry_thread_.join();
     if (video_thread_.joinable())
         video_thread_.join();
+
+    // M3：关闭参数事件文件（写入 session.json 的 files 列表前完成）
+    {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+        if (events_file_.is_open())
+        {
+            events_file_.flush();
+            events_file_.close();
+        }
+    }
 
     // 阶段 3：收尾状态（注意：writeSessionJson 内部会再次加 session_mutex_，不能在持锁时调用）
     std::string final_status;
@@ -757,7 +833,8 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     oss << "    \"video_index_rows\": " << video_index_rows_.load() << ",\n";
     oss << "    \"video_frames_dropped\": " << video_dropped_.load() << ",\n";
     oss << "    \"telemetry_rows_dropped\": " << telemetry_dropped_.load() << ",\n";
-    oss << "    \"write_errors\": " << write_errors_.load() << "\n";
+    oss << "    \"write_errors\": " << write_errors_.load() << ",\n";
+    oss << "    \"parameter_events\": " << parameter_events_.load() << "\n";
     oss << "  },\n";
     oss << "  \"video\": {\n";
     oss << "    \"file\": \"debug_001.avi\",\n";
@@ -827,6 +904,41 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     }
 }
 
+void Recorder::appendParameterEvent(const ParamChangeEvent &event)
+{
+    if (!recording_.load())
+        return; // 未录制时只更新运行参数，不写事件（之后开始录制时快照会反映当前值）
+
+    int64_t session_start_us = 0;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        if (session_start_us_ <= 0)
+            return;
+        session_start_us = session_start_us_;
+    }
+    const int64_t elapsed_us =
+        event.timestamp_us > session_start_us ? event.timestamp_us - session_start_us : 0;
+
+    std::ostringstream oss;
+    oss << "{";
+    oss << "\"type\":\"parameter_changed\",";
+    oss << "\"elapsed_us\":" << elapsed_us << ",";
+    oss << "\"frame_id\":" << event.frame_id << ",";
+    oss << "\"source\":" << jsonQuoted(event.source) << ",";
+    oss << "\"parameter\":" << jsonQuoted(event.parameter) << ",";
+    oss << "\"old_value\":" << jsonNumber(event.old_value) << ",";
+    oss << "\"new_value\":" << jsonNumber(event.new_value) << ",";
+    oss << "\"result\":" << jsonQuoted(event.result);
+    oss << "}";
+
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (!events_file_.is_open())
+        return;
+    events_file_ << oss.str() << "\n";
+    events_file_.flush();
+    parameter_events_.fetch_add(1);
+}
+
 std::string Recorder::statusJson() const
 {
     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -844,6 +956,7 @@ std::string Recorder::statusJson() const
     oss << "\"video_dropped\":" << video_dropped_.load() << ',';
     oss << "\"telemetry_dropped\":" << telemetry_dropped_.load() << ',';
     oss << "\"write_errors\":" << write_errors_.load() << ',';
+    oss << "\"parameter_events\":" << parameter_events_.load() << ',';
     oss << "\"video_width\":" << video_width_ << ',';
     oss << "\"video_height\":" << video_height_;
     oss << "}";
@@ -895,7 +1008,7 @@ void Recorder::controlLoop()
             ::close(client);
             continue;
         }
-        char buf[512] = {};
+        char buf[8192] = {};
         const ssize_t n = ::recv(client, buf, sizeof(buf) - 1, 0);
         std::string response;
         if (n <= 0)
@@ -920,6 +1033,61 @@ void Recorder::controlLoop()
             {
                 stopSession("web_control");
                 response = statusJson();
+            }
+            else if (cmd == "params")
+            {
+                response = runtime_params_
+                               ? runtime_params_->paramsJson()
+                               : "{\"ok\":false,\"error\":\"参数服务未启用\"}";
+            }
+            else if (cmd == "params.apply")
+            {
+                if (!runtime_params_)
+                {
+                    response = "{\"ok\":false,\"error\":\"参数服务未启用\"}";
+                }
+                else
+                {
+                    const std::string values = extractJsonObject(request, "values");
+                    std::string error;
+                    std::string applied;
+                    if (runtime_params_->applyJsonValues(values, "web", &error, &applied))
+                    {
+                        std::ostringstream oss;
+                        oss << "{\"ok\":true,\"applied\":" << jsonQuoted(applied)
+                            << ",\"params\":" << runtime_params_->paramsJson() << "}";
+                        response = oss.str();
+                    }
+                    else
+                    {
+                        response = "{\"ok\":false,\"error\":" + jsonQuoted(error) + "}";
+                    }
+                }
+            }
+            else if (cmd == "params.save")
+            {
+                if (!runtime_params_)
+                {
+                    response = "{\"ok\":false,\"error\":\"参数服务未启用\"}";
+                }
+                else
+                {
+                    std::string error;
+                    const std::string path = runtime_params_->configPath();
+                    if (path.empty())
+                    {
+                        response = "{\"ok\":false,\"error\":\"配置文件路径未知\"}";
+                    }
+                    else if (runtime_params_->saveToYaml(path, &error))
+                    {
+                        response = "{\"ok\":true,\"saved_to\":" + jsonQuoted(path) +
+                                   ",\"params\":" + runtime_params_->paramsJson() + "}";
+                    }
+                    else
+                    {
+                        response = "{\"ok\":false,\"error\":" + jsonQuoted(error) + "}";
+                    }
+                }
             }
             else
             {

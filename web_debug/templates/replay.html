@@ -78,6 +78,8 @@
                 role="tab" aria-selected="false" aria-controls="tabFrame">当前帧数据</button>
         <button class="side-tab" id="tabBtnSession" type="button"
                 role="tab" aria-selected="false" aria-controls="tabSession">会话信息</button>
+        <button class="side-tab" id="tabBtnEvents" type="button"
+                role="tab" aria-selected="false" aria-controls="tabEvents">参数事件</button>
       </nav>
       <div class="tab-panels">
 
@@ -216,6 +218,7 @@
                 <div class="kv"><span class="k">缺失视频帧</span><span class="v muted" id="iMissing">--</span></div>
                 <div class="kv"><span class="k">视频编码</span><span class="v small muted" id="iCodec">--</span></div>
                 <div class="kv"><span class="k">视频分辨率</span><span class="v small muted" id="iVideoSize">--</span></div>
+                <div class="kv"><span class="k">参数修改事件</span><span class="v muted" id="iEvents">--</span></div>
               </div>
               <div class="note" id="iErrors">录制错误：无</div>
             </div>
@@ -236,6 +239,25 @@
               <div class="note wrap" id="configNote">--</div>
             </div>
           </section>
+        </div>
+
+        <!-- 页签 D：参数事件（M3） -->
+        <div class="tab-pane" id="tabEvents" role="tabpanel" aria-labelledby="tabBtnEvents" hidden>
+          <div class="param-toolbar">
+            <div class="group">
+              <span class="label">参数修改事件</span>
+              <span class="meta" id="eventMeta">--</span>
+            </div>
+            <div class="group" style="margin-left:auto;">
+              <span class="meta">点击事件跳转时间轴 / 视频帧 / 曲线播放头</span>
+            </div>
+          </div>
+          <div class="events-list" id="eventList">
+            <div class="events-empty">加载会话后显示参数事件</div>
+          </div>
+          <div class="note" id="eventNote" style="margin-top:0; border-top:0; padding-top:0;">
+            事件只读：回放页面不会修改 C++ 实时运行参数。旧版 M2 会话没有 events.jsonl 时显示为空。
+          </div>
         </div>
 
       </div>
@@ -361,6 +383,7 @@ const state = {
   speed: 1,
   windowS: 20,
   selected: new Set(["target_x", "offset_x", "fps", "processing_time_ms"]),
+  events: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -369,8 +392,8 @@ const state = {
 let activeTab = "charts";
 function switchTab(name) {
   activeTab = name;
-  const panes = { charts: "tabCharts", frame: "tabFrame", session: "tabSession" };
-  const buttons = { charts: "tabBtnCharts", frame: "tabBtnFrame", session: "tabBtnSession" };
+  const panes = { charts: "tabCharts", frame: "tabFrame", session: "tabSession", events: "tabEvents" };
+  const buttons = { charts: "tabBtnCharts", frame: "tabBtnFrame", session: "tabBtnSession", events: "tabBtnEvents" };
   for (const key of Object.keys(panes)) {
     const isActive = key === name;
     $(panes[key]).hidden = !isActive;
@@ -385,6 +408,7 @@ function switchTab(name) {
 $("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
 $("tabBtnFrame").addEventListener("click", () => switchTab("frame"));
 $("tabBtnSession").addEventListener("click", () => switchTab("session"));
+$("tabBtnEvents").addEventListener("click", () => switchTab("events"));
 
 // ---------------------------------------------------------------------------
 // 曲线字段定义（参考 Misaka 回放的"可选字段"逻辑；字段均来自录制 CSV 的真实列）
@@ -573,6 +597,22 @@ function drawFieldChart(canvas, field, valueEl, rows, t0, t1) {
   }
   ctx.stroke();
 
+  // 参数修改事件标记（黄色虚线；点击事件页签可跳转到对应时刻）
+  if (state.events && state.events.length) {
+    ctx.strokeStyle = "rgba(210,153,34,0.55)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (const ev of state.events) {
+      if (ev.elapsed_ms < t0 || ev.elapsed_ms > t1) continue;
+      const ex = xOf(ev.elapsed_ms);
+      ctx.beginPath();
+      ctx.moveTo(ex, padT);
+      ctx.lineTo(ex, h - padB);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
   // 播放头（红色竖线，位置即当前回放时刻）
   const px = xOf(state.t);
   ctx.strokeStyle = "rgba(248,81,73,0.85)";
@@ -642,6 +682,7 @@ async function loadSession(dir) {
   state.telemetry = data.telemetry || [];
   state.videoIndex = data.video_index || [];
   state.missingIds = data.missing_frame_ids || [];
+  state.events = (data.summary && data.summary.events) || [];
   state.videoElapsed = state.videoIndex.map((r) => r.elapsed_ms);
   state.teleElapsed = state.telemetry.map((r) => r.elapsed_ms);
   state.duration = data.summary.duration_ms || 1;
@@ -654,6 +695,7 @@ async function loadSession(dir) {
 
   renderSummary();
   renderSeriesPicker();
+  renderEvents();
   const timeline = $("timeline");
   timeline.max = String(Math.max(1, Math.round(state.duration)));
   timeline.value = "0";
@@ -686,6 +728,9 @@ function renderSummary() {
   $("iFrames").textContent = counts.frames_processed ?? "--";
   $("iTelemetry").textContent = counts.telemetry_rows ?? state.telemetry.length;
   $("iVideo").textContent = s.video_frames_indexed ?? "--";
+  $("iEvents").textContent = state.events.length > 0
+    ? `${state.events.length} 条`
+    : (s.events_available ? "0 条" : "无 events.jsonl");
   $("iVideoDropped").textContent = counts.video_frames_dropped ?? "--";
   $("iTelemetryDropped").textContent = counts.telemetry_rows_dropped ?? "--";
   $("iMissing").textContent = missing;
@@ -736,6 +781,78 @@ function renderSummary() {
   } else {
     $("sampleRateText").textContent = "";
   }
+}
+
+// ---------------------------------------------------------------------------
+// 参数事件（M3）：列表 + 点击跳转（时间轴 / 视频帧 / 曲线播放头同步）
+// ---------------------------------------------------------------------------
+const PARAM_LABELS = {
+  bright_thresh: "亮度阈值",
+  green_weight_thresh: "绿色权重阈值",
+  min_area: "最小面积",
+  max_area: "最大面积",
+  min_radius: "最小半径",
+  max_radius: "最大半径",
+  min_circularity: "最小圆形度",
+  min_aspect_ratio: "宽高比下限",
+  max_aspect_ratio: "宽高比上限",
+  kernel_size: "形态学核大小",
+  open_iterations: "开运算次数",
+  close_iterations: "闭运算次数",
+  required_frames: "连续确认帧数",
+  required_lost_frames: "连续丢失帧数",
+  max_center_dist: "中心跳变阈值",
+  turn_threshold: "转向阈值",
+  dist_far_thresh: "远距离阈值",
+  dist_near_thresh: "近距离阈值",
+  exposure: "曝光",
+  gain: "增益",
+};
+
+const PARAM_SOURCE_LABELS = { web: "网页", trackbar: "滑条" };
+
+function renderEvents() {
+  const list = $("eventList");
+  const meta = $("eventMeta");
+  const events = state.events || [];
+  if (meta) meta.textContent = `${events.length} 条`;
+  if (!list) return;
+  if (!events.length) {
+    const legacy = state.summary && !state.summary.events_available;
+    list.innerHTML = legacy
+      ? '<div class="events-empty">该会话无参数修改事件（旧版 M2 会话没有 events.jsonl，回放其余功能不受影响）</div>'
+      : '<div class="events-empty">该会话无参数修改事件（录制期间未修改参数）</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const ev of events) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "event-item";
+    btn.dataset.index = String(ev.index);
+    btn.title = `${ev.parameter}：${ev.old_value} → ${ev.new_value}（${ev.result}）`;
+    const label = PARAM_LABELS[ev.parameter] || ev.parameter;
+    const source = PARAM_SOURCE_LABELS[ev.source] || ev.source || "--";
+    btn.innerHTML =
+      `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
+      `<span class="event-param"><b>${label}</b><small>${ev.parameter}</small></span>` +
+      `<span class="event-change">${ev.old_value} → ${ev.new_value}</span>` +
+      `<span class="event-source">${source}</span>` +
+      `<span class="event-result ${ev.result === "applied" ? "ok" : "err"}">${ev.result}</span>`;
+    btn.addEventListener("click", () => jumpToEvent(ev));
+    list.appendChild(btn);
+  }
+}
+
+function jumpToEvent(ev) {
+  setPlaying(false);
+  updateAt(ev.elapsed_ms);
+  paintCharts(true);
+  for (const el of document.querySelectorAll(".event-item")) {
+    el.classList.toggle("active", Number(el.dataset.index) === ev.index);
+  }
+  $("locateResult").textContent =
+    `已跳转参数事件（frame ${ev.frame_id} @ ${fmtMs(ev.elapsed_ms)}）`;
 }
 
 const CONFIG_LABELS = [

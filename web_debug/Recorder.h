@@ -36,8 +36,11 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "RuntimeParams.h"
+
 namespace webdebug
 {
+class RuntimeParams;
 
 /// 单帧录制数据（由视觉线程提交；全部字段来自本帧实际算法输出）
 struct RecordFrame
@@ -121,7 +124,14 @@ public:
     /// 视觉线程每帧调用（非阻塞；未在录制时直接返回）
     void submitFrame(const RecordFrame &frame);
 
+    /// M3：绑定运行时参数服务（控制口 params 命令 + 录制快照）
+    void setRuntimeParams(RuntimeParams *params) { runtime_params_ = params; }
+
+    /// M3：参数修改生效时追加一条事件到 events.jsonl（未录制时忽略）
+    void appendParameterEvent(const ParamChangeEvent &event);
+
     bool enabled() const { return options_.enabled; }
+    uint64_t parameterEvents() const { return parameter_events_.load(); }
     bool isRecording() const { return recording_.load(); }
     uint64_t framesProcessed() const { return frames_processed_.load(); }
     uint64_t telemetryRows() const { return telemetry_rows_.load(); }
@@ -191,6 +201,12 @@ private:
     std::string video_path_;
     std::string video_index_path_;
 
+    // 参数事件（M3）：events.jsonl 追加写入
+    RuntimeParams *runtime_params_ = nullptr;
+    std::mutex events_mutex_;
+    std::ofstream events_file_;
+    std::string events_path_;
+
     // 控制口
     std::thread control_thread_;
     int control_listen_fd_ = -1;
@@ -203,6 +219,7 @@ private:
     std::atomic<uint64_t> telemetry_dropped_{0};
     std::atomic<uint64_t> write_errors_{0};
     std::atomic<uint64_t> video_index_rows_{0};
+    std::atomic<uint64_t> parameter_events_{0};
 
     // 错误列表（受 errors_mutex_ 保护，与 session_mutex_ 分开避免锁嵌套）
     mutable std::mutex errors_mutex_;

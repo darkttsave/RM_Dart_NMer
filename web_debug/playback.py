@@ -201,6 +201,33 @@ class ReplaySession:
                     "elapsed_ms": _to_int(row.get("source_elapsed_us")) / 1000.0,
                 })
 
+        # M3：参数修改事件（录制期间由 C++ 写入；无事件文件时保持空列表，不影响回放）
+        self.events = []
+        events_path = os.path.join(self.dir, "events.jsonl")
+        if os.path.isfile(events_path):
+            try:
+                with open(events_path, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            item = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        self.events.append({
+                            "index": len(self.events),
+                            "elapsed_ms": _to_float(item.get("elapsed_us"), 0.0) / 1000.0,
+                            "frame_id": _to_int(item.get("frame_id"), 0),
+                            "source": str(item.get("source", "")),
+                            "parameter": str(item.get("parameter", "")),
+                            "old_value": _to_float(item.get("old_value"), 0.0),
+                            "new_value": _to_float(item.get("new_value"), 0.0),
+                            "result": str(item.get("result", "")),
+                        })
+            except OSError:
+                self.events = []
+
         self.video_path = ""
         for name in ("debug_001.avi", "debug.avi"):
             candidate = os.path.join(self.dir, name)
@@ -346,7 +373,9 @@ class ReplaySession:
             "accuracy_note": accuracy_note,
             "frame_id_min": self.telemetry[0]["frame_id"] if self.telemetry else None,
             "frame_id_max": self.telemetry[-1]["frame_id"] if self.telemetry else None,
-            "events_available": False,  # M3 预留：参数修改/人工标记事件
+            # M3：参数修改事件（回放页签展示；旧 M2 会话无 events.jsonl 时为空列表）
+            "events_available": bool(self.events),
+            "events": self.events,
             "time_base": self.meta.get("time_base", ""),
             "frame_timestamp_source": self.meta.get("frame_timestamp_source", ""),
             "app_version": self.meta.get("app_version", ""),

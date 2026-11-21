@@ -5,7 +5,9 @@
 # 用途：启动 Flask 调试后端 + C++ 视觉主程序（可选模拟视频源，无需工业相机）。
 #
 # 用法：
-#   ./run_web_debug.sh                        # 工业相机 + 真实串口 + 录制 + 实时预览
+#   ./run_web_debug.sh                        # 工业相机 + 真实串口 + 实时预览（录制需网页手动开始）
+#   ./run_web_debug.sh --auto-record          # 实时预览 + 启动即开始录制
+#   ./run_web_debug.sh --record-only          # 无预览录制：不启动预览界面，按配置参数自动录制
 #   ./run_web_debug.sh --source synthetic     # 无相机：合成绿色引导灯视频源
 #   ./run_web_debug.sh --source image:test/test.png --no-serial --no-gui
 #   ./run_web_debug.sh --no-record            # 关闭录制
@@ -33,6 +35,7 @@ DATA_PORT="${DATA_PORT:-5010}"
 REPLAY_PORT="${REPLAY_PORT:-5001}"
 BACKEND_ONLY=0
 REPLAY=0
+RECORD_ONLY=0
 SESSION_DIR=""
 SESSION_ROOT=""
 
@@ -40,7 +43,9 @@ usage() {
     cat <<'EOF'
 用法: ./run_web_debug.sh [选项]
 
-  默认                真实使用（相机 + 串口 + 录制 + 实时预览）
+  默认                真实使用（相机 + 串口 + 实时预览；录制由网页手动开始）
+  --auto-record       启动即开始录制（可与默认预览模式组合）
+  --record-only       无预览录制模式：不启动预览界面/Flask，按配置参数自动录制
   --source <spec>     模拟视频源: synthetic | synthetic:none | image:<path> | video:<path>
   --no-serial         不打开串口（模拟发送）
   --no-gui            无头运行（不创建 OpenCV 窗口）
@@ -54,7 +59,10 @@ usage() {
   -h, --help          显示本帮助
 
 示例:
-  ./run_web_debug.sh                                          # 真实使用
+  ./run_web_debug.sh                                          # 真实使用（预览，录制手动开始）
+  ./run_web_debug.sh --auto-record                            # 预览 + 启动即录制
+  ./run_web_debug.sh --record-only                            # 无预览自动录制（现场一键录制）
+  ./run_web_debug.sh --record-only --record-root /data/rec    # 无预览录制到指定目录
   ./run_web_debug.sh --source synthetic --no-serial --no-gui  # 无相机联调
   ./run_web_debug.sh --replay                                 # 离线回放
 EOF
@@ -73,6 +81,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --replay)
             REPLAY=1
+            shift
+            ;;
+        --record-only)
+            RECORD_ONLY=1
+            shift
+            ;;
+        --auto-record)
+            ARGS+=("--auto-record")
             shift
             ;;
         --session)
@@ -128,6 +144,35 @@ if [ "$REPLAY" -eq 1 ]; then
     echo "[run_web_debug] 启动 M2 离线回放: http://$WEB_HOST:$REPLAY_PORT/ (会话: ${PLAYBACK_ARGS[*]})"
     exec python3 "$ROOT_DIR/web_debug/playback.py" \
         --host "$WEB_HOST" --port "$REPLAY_PORT" "${PLAYBACK_ARGS[@]}"
+fi
+
+# ---- 0.2 无预览录制模式（--record-only）----
+# 不启动 Flask / 预览界面，主程序按 config/debug.yaml 的参数自动开始录制（视频 + 遥测 + 事件）。
+# 适合现场"一键录制"：参数使用配置文件中已保存的值（M3 网页保存后重启即生效）。
+if [ "$RECORD_ONLY" -eq 1 ]; then
+    if [ ! -x "$BUILD_DIR/main" ]; then
+        echo "[run_web_debug] 未找到 build/main，先构建..."
+        cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null || exit 1
+        nice -n 19 cmake --build "$BUILD_DIR" -j2 || exit 1
+    fi
+    echo "[run_web_debug] 无预览录制模式：不启动实时预览/Flask，按配置参数自动录制"
+    RECORD_ROOT_DISPLAY=""
+    for ((i = 0; i < ${#ARGS[@]}; i++)); do
+        if [ "${ARGS[$i]}" = "--record-root" ] && [ $((i + 1)) -lt ${#ARGS[@]} ]; then
+            RECORD_ROOT_DISPLAY="${ARGS[$((i + 1))]}"
+        fi
+    done
+    if [ -z "$RECORD_ROOT_DISPLAY" ]; then
+        RECORD_ROOT_DISPLAY=$(awk '/^recording:/{f=1} f && /root:/{print $2; exit}' "$ROOT_DIR/config/debug.yaml" 2>/dev/null | tr -d '"')
+        [ -n "$RECORD_ROOT_DISPLAY" ] && RECORD_ROOT_DISPLAY="$RECORD_ROOT_DISPLAY（config，相对项目根）"
+    fi
+    echo "[run_web_debug] 录制根目录: ${RECORD_ROOT_DISPLAY:-未知}"
+    (
+        cd "$BUILD_DIR" && ./main "${ARGS[@]}" --no-gui --no-web-debug --record --auto-record
+    )
+    MAIN_RC=$?
+    echo "[run_web_debug] 视觉主程序退出 (code=$MAIN_RC)"
+    exit "$MAIN_RC"
 fi
 
 # ---- 1. 启动 Flask 调试后端 ----

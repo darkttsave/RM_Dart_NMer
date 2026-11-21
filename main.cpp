@@ -5,15 +5,20 @@
  * @date 2025-10-24
  */
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
-#include <vector>
-#include <chrono>
+#include <map>
 #include <memory>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
@@ -24,6 +29,7 @@
 #include "web_debug/DebugTelemetry.h"
 #include "web_debug/FrameSource.h"
 #include "web_debug/Recorder.h"
+#include "web_debug/RuntimeParams.h"
 
 using namespace cv;
 using namespace std;
@@ -60,6 +66,7 @@ struct CliOptions
     bool forceSimSerial = false;   // --no-serial: 跳过串口打开，仅模拟发送
     bool showGui = true;           // --no-gui: 不创建 OpenCV 窗口（无头测试/服务器）
     bool recordEnabled = true;     // --record / --no-record: 录制系统开关（覆盖配置）
+    int autoRecordOverride = -1;   // -1=跟随配置, 0=不自动录制, 1=启动即录制（覆盖配置）
     std::string recordRoot;        // --record-root: 录制会话根目录（覆盖配置）
     int webDebugOverride = -1;     // -1=跟随配置文件, 0=强制关闭, 1=强制开启
 };
@@ -74,6 +81,8 @@ void printUsage(const char *prog)
          << "  --no-gui            不创建 OpenCV 显示窗口（无头运行）\n"
          << "  --record            启用录制（覆盖配置 recording.enabled）\n"
          << "  --no-record         关闭录制（不生成会话目录/CSV/视频）\n"
+         << "  --auto-record       程序启动即开始录制（覆盖配置 recording.auto_start）\n"
+         << "  --no-auto-record    程序启动不自动录制（预览调试时手动开始，覆盖配置）\n"
          << "  --record-root <dir> 指定录制会话根目录（覆盖配置 recording.root）\n"
          << "  --web-debug         强制启用 Web 调试数据发布（覆盖配置）\n"
          << "  --no-web-debug      强制关闭 Web 调试数据发布（覆盖配置）\n"
@@ -96,6 +105,10 @@ CliOptions parseCli(int argc, char **argv)
             opt.recordEnabled = true;
         else if (arg == "--no-record")
             opt.recordEnabled = false;
+        else if (arg == "--auto-record")
+            opt.autoRecordOverride = 1;
+        else if (arg == "--no-auto-record")
+            opt.autoRecordOverride = 0;
         else if (arg == "--record-root" && i + 1 < argc)
             opt.recordRoot = argv[++i];
         else if (arg == "--web-debug")
@@ -138,6 +151,13 @@ int main(int argc, char **argv)
     int minAspX100 = 50, maxAspX100 = 200;
     int minArea = 50, maxArea = 50000;
     int minRadius = 10, maxRadius = 30;
+    // M3：可热更新参数的初值（来自 YAML，YAML 缺失时使用算法内置默认值）
+    int requiredFrames = 10;
+    int requiredLostFrames = 10;
+    double maxCenterDist = 100.0;
+    int kernelSize = 5;
+    int openIterations = 1;
+    int closeIterations = 1;
     std::string loadedConfigPath;
 
     // Web 调试数据发布配置（config/debug.yaml 的 web_debug 段，可被命令行覆盖）
@@ -254,6 +274,26 @@ int main(int argc, char **argv)
             if (rc["control_port"])
                 recordControlPort = rc["control_port"].as<int>();
         }
+        if (config["detection"] && config["detection"]["time_filter"])
+        {
+            auto tf = config["detection"]["time_filter"];
+            if (tf["required_frames"])
+                requiredFrames = tf["required_frames"].as<int>();
+            if (tf["required_lost_frames"])
+                requiredLostFrames = tf["required_lost_frames"].as<int>();
+            if (tf["max_center_dist"])
+                maxCenterDist = tf["max_center_dist"].as<double>();
+        }
+        if (config["detection"] && config["detection"]["morphology"])
+        {
+            auto mo = config["detection"]["morphology"];
+            if (mo["kernel_size"])
+                kernelSize = mo["kernel_size"].as<int>();
+            if (mo["open_iterations"])
+                openIterations = mo["open_iterations"].as<int>();
+            if (mo["close_iterations"])
+                closeIterations = mo["close_iterations"].as<int>();
+        }
         if (config["detection"] && config["detection"]["shape_filter"])
         {
             auto sf = config["detection"]["shape_filter"];
@@ -277,6 +317,37 @@ int main(int argc, char **argv)
     if (terminalLogLineLimit < 0)
     {
         terminalLogLineLimit = 0;
+    }
+
+    // M3：运行时参数服务。C++ 运行值是实际生效值的权威来源：
+    // 网页 / 控制口只通过 RuntimeParams 修改，视觉线程每帧取一致快照。
+    webdebug::RuntimeParams runtimeParams;
+    {
+        std::map<std::string, double> initial = {
+            {"bright_thresh", static_cast<double>(brightThresh)},
+            {"green_weight_thresh", greenWeightX100 / 100.0},
+            {"min_area", static_cast<double>(minArea)},
+            {"max_area", static_cast<double>(maxArea)},
+            {"min_radius", static_cast<double>(minRadius)},
+            {"max_radius", static_cast<double>(maxRadius)},
+            {"min_circularity", circularityX100 / 100.0},
+            {"min_aspect_ratio", minAspX100 / 100.0},
+            {"max_aspect_ratio", maxAspX100 / 100.0},
+            {"kernel_size", static_cast<double>(kernelSize)},
+            {"open_iterations", static_cast<double>(openIterations)},
+            {"close_iterations", static_cast<double>(closeIterations)},
+            {"required_frames", static_cast<double>(requiredFrames)},
+            {"required_lost_frames", static_cast<double>(requiredLostFrames)},
+            {"max_center_dist", maxCenterDist},
+            {"turn_threshold", turnThreshold},
+            {"dist_far_thresh", distFarThresh},
+            {"dist_near_thresh", distNearThresh},
+            {"exposure", static_cast<double>(exposure)},
+            {"gain", static_cast<double>(gain)},
+        };
+        runtimeParams.initialize(initial);
+        if (!loadedConfigPath.empty())
+            runtimeParams.setConfigPath(std::filesystem::absolute(loadedConfigPath).string());
     }
 
     const std::string runTimestamp = makeRunTimestamp();
@@ -372,6 +443,38 @@ int main(int argc, char **argv)
         createTrackbar("Gain", "BGR Control", &gain, 100);
     }
 
+    // M3：GUI Trackbar 与运行时参数统一绑定。
+    // Trackbar 只是控件：拖动时写回 RuntimeParams（来源 trackbar），网页修改后反向刷新 Trackbar 显示；
+    // 两者的运行值始终只有 RuntimeParams 一份，避免"网页与 Trackbar 各自维护不同运行值"。
+    struct TrackbarBinding
+    {
+        const char *param;
+        const char *label;
+        int *value;
+        double scale; // 参数值 = Trackbar 整数 / scale
+        int min_trackbar;
+        int max_trackbar;
+    };
+    std::vector<TrackbarBinding> trackbarBindings = {
+        {"bright_thresh", "Bright(0-255)", &brightThresh, 1.0, 0, 255},
+        {"green_weight_thresh", "Green% x100", &greenWeightX100, 100.0, 0, 100},
+        {"min_circularity", "Circ% x100", &circularityX100, 100.0, 0, 100},
+        {"min_aspect_ratio", "Asp_min x100", &minAspX100, 100.0, 0, 300},
+        {"max_aspect_ratio", "Asp_max x100", &maxAspX100, 100.0, 0, 500},
+        {"min_area", "Area_min(px2)", &minArea, 1.0, 0, 10000},
+        {"max_area", "Area_max(px2)", &maxArea, 1.0, 0, 100000},
+        {"min_radius", "Radius_min(px)", &minRadius, 1.0, 0, 200},
+        {"max_radius", "Radius_max(px)", &maxRadius, 1.0, 0, 200},
+        {"exposure", "Exposure(us)", &exposure, 1.0, 0, 100000},
+        {"gain", "Gain", &gain, 1.0, 0, 100},
+    };
+    std::map<std::string, int> lastTrackbarValue;
+    if (cli.showGui)
+    {
+        for (const auto &binding : trackbarBindings)
+            lastTrackbarValue[binding.param] = *binding.value;
+    }
+
     // 4. M1 调试数据发布（独立后台线程：视觉线程只做非阻塞拷贝，故障不影响主链路）
     webdebug::Options webOptions;
     webOptions.enabled = webDebugEnabled;
@@ -397,22 +500,10 @@ int main(int argc, char **argv)
     // 5. M2 数据录制（独立后台线程 + 会话目录；不依赖 Flask / 浏览器）
     if (!cli.recordEnabled)
         recordEnabled = false;
+    if (cli.autoRecordOverride >= 0)
+        recordAutoStart = (cli.autoRecordOverride == 1);
     if (!cli.recordRoot.empty())
         recordRoot = cli.recordRoot;
-
-    // 运行时实际生效参数快照（来自主程序变量，可能与磁盘 YAML 不同）
-    char runtimeParams[1024];
-    std::snprintf(
-        runtimeParams, sizeof(runtimeParams),
-        "{\"turn_threshold\":%.4g,\"dist_far_thresh\":%.4g,\"dist_near_thresh\":%.4g,"
-        "\"bright_thresh\":%d,\"green_weight_thresh\":%.4g,\"min_circularity\":%.4g,"
-        "\"min_aspect_ratio\":%.4g,\"max_aspect_ratio\":%.4g,\"min_area\":%d,\"max_area\":%d,"
-        "\"min_radius\":%d,\"max_radius\":%d,\"exposure\":%d,\"gain\":%d,"
-        "\"required_frames\":%d,\"required_lost_frames\":%d}",
-        turnThreshold, distFarThresh, distNearThresh, brightThresh, greenWeightX100 / 100.0,
-        circularityX100 / 100.0, minAspX100 / 100.0, maxAspX100 / 100.0, minArea, maxArea,
-        minRadius, maxRadius, exposure, gain, detector.getRequiredFrames(),
-        detector.getRequiredLostFrames());
 
     webdebug::RecordOptions recordOptions;
     recordOptions.enabled = recordEnabled;
@@ -431,9 +522,15 @@ int main(int argc, char **argv)
     recordOptions.source_label = webOptions.source_label;
     recordOptions.mode = webOptions.mode;
     recordOptions.config_path = std::filesystem::absolute(loadedConfigPath).string();
-    recordOptions.runtime_params_json = runtimeParams;
-    recordOptions.app_version = "DART-WEB-M2 (base M1 commit 0f3ac03)";
+    // 启动时快照仅作回退；实际每个录制会话开始时由 Recorder 从 RuntimeParams 取当前值
+    recordOptions.runtime_params_json = runtimeParams.runningJson();
+    recordOptions.app_version = "DART-WEB-M3 (base M2 commit 9adb3f0)";
     webdebug::Recorder recorder;
+    recorder.setRuntimeParams(&runtimeParams);
+    // 参数实际生效 -> 若正在录制则追加 events.jsonl（未录制时不写事件，只更新运行参数）
+    runtimeParams.setEventSink([&recorder](const webdebug::ParamChangeEvent &event) {
+        recorder.appendParameterEvent(event);
+    });
     recorder.configure(recordOptions);
     recorder.start();
 
@@ -458,6 +555,51 @@ int main(int argc, char **argv)
         {
             cerr << "[Main] Serial port disconnected, exiting for watchdog restart." << endl;
             return 1;
+        }
+
+        // M3（1/3）：GUI Trackbar 拖动 -> 运行时参数（Trackbar 只是控件，权威值始终在 RuntimeParams）
+        if (cli.showGui)
+        {
+            for (const auto &binding : trackbarBindings)
+            {
+                auto last = lastTrackbarValue.find(binding.param);
+                const int current = *binding.value;
+                if (last == lastTrackbarValue.end() || last->second == current)
+                    continue;
+                last->second = current;
+                std::string error;
+                std::vector<std::pair<std::string, std::pair<double, double>>> changes;
+                runtimeParams.applyValues({{binding.param, current / binding.scale}}, "trackbar",
+                                          &error, &changes);
+                if (!error.empty())
+                    std::cout << "[Params] Trackbar 修改被拒绝: " << error << std::endl;
+            }
+        }
+
+        // M3（2/3）：每帧取一次完整参数快照，保证同一帧处理过程中参数一致
+        const webdebug::RuntimeParams::Snapshot runtimeSnapshot = runtimeParams.snapshot();
+        auto runtimeValue = [&runtimeSnapshot](const char *name) -> double {
+            auto it = runtimeSnapshot.find(name);
+            return (it == runtimeSnapshot.end()) ? 0.0 : it->second;
+        };
+        exposure = static_cast<int>(std::lround(runtimeValue("exposure")));
+        gain = static_cast<int>(std::lround(runtimeValue("gain")));
+
+        // M3（3/3）：网页修改后刷新 Trackbar 显示；控件范围只影响显示，不回写运行值
+        if (cli.showGui)
+        {
+            for (const auto &binding : trackbarBindings)
+            {
+                const int expected = std::clamp(
+                    static_cast<int>(std::lround(runtimeValue(binding.param) * binding.scale)),
+                    binding.min_trackbar, binding.max_trackbar);
+                if (expected != *binding.value)
+                {
+                    *binding.value = expected;
+                    cv::setTrackbarPos(binding.label, "BGR Control", expected);
+                    lastTrackbarValue[binding.param] = expected;
+                }
+            }
         }
 
         if (camera)
@@ -489,11 +631,24 @@ int main(int argc, char **argv)
             resultSize = Size(originalSize.width * RESULT_SCALE, originalSize.height * RESULT_SCALE);
         }
 
-        detector.setBrightThresh(brightThresh);
-        detector.setGreenWeightThresh(greenWeightX100 / 100.0f);
-        detector.setShapeFilter(circularityX100 / 100.0, minAspX100 / 100.0, maxAspX100 / 100.0);
-        detector.setAreaFilter(minArea, maxArea);
-        detector.setRadiusFilter(minRadius, maxRadius);
+        // M3：把本帧参数快照同步到识别器（参数不变时与 M2 行为完全一致）
+        detector.setBrightThresh(static_cast<int>(std::lround(runtimeValue("bright_thresh"))));
+        detector.setGreenWeightThresh(static_cast<float>(runtimeValue("green_weight_thresh")));
+        detector.setShapeFilter(runtimeValue("min_circularity"), runtimeValue("min_aspect_ratio"),
+                                runtimeValue("max_aspect_ratio"));
+        detector.setAreaFilter(runtimeValue("min_area"), runtimeValue("max_area"));
+        detector.setRadiusFilter(static_cast<int>(std::lround(runtimeValue("min_radius"))),
+                                 static_cast<int>(std::lround(runtimeValue("max_radius"))));
+        detector.setTurnThreshold(static_cast<float>(runtimeValue("turn_threshold")));
+        detector.setDistanceThresholds(static_cast<float>(runtimeValue("dist_far_thresh")),
+                                       static_cast<float>(runtimeValue("dist_near_thresh")));
+        detector.setRequiredFrames(static_cast<int>(std::lround(runtimeValue("required_frames"))));
+        detector.setRequiredLostFrames(
+            static_cast<int>(std::lround(runtimeValue("required_lost_frames"))));
+        detector.setMaxCenterDist(static_cast<float>(runtimeValue("max_center_dist")));
+        detector.setMorphology(static_cast<int>(std::lround(runtimeValue("kernel_size"))),
+                               static_cast<int>(std::lround(runtimeValue("open_iterations"))),
+                               static_cast<int>(std::lround(runtimeValue("close_iterations"))));
 
         // 主循环帧率（含采集/显示开销）与识别处理耗时：来自实际运行，非估算
         const auto frameStartTime = std::chrono::steady_clock::now();
@@ -505,6 +660,8 @@ int main(int argc, char **argv)
                                              detectEndTime.time_since_epoch())
                                              .count();
         const uint64_t frameId = ++frameCounter;
+        // M3：参数事件记录"生效时最近一帧"的帧号与时间戳（与遥测/视频索引同一时间基准）
+        runtimeParams.setFrameContext(frameId, frameTimestampUs);
         {
             const double dt = std::chrono::duration<double>(frameStartTime - lastFrameTime).count();
             lastFrameTime = frameStartTime;

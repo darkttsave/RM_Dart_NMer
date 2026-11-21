@@ -217,14 +217,19 @@ class FrameReceiver(threading.Thread):
 # 录制控制（转发到 C++ 本机控制口；Flask 只是控制入口，录制执行主体在 C++ 侧）
 # --------------------------------------------------------------------------
 def recorder_command(cmd, control_port=DEFAULT_CONTROL_PORT):
-    """向 C++ 录制控制口（127.0.0.1）发送 status/start/stop，返回其 JSON 响应。"""
+    """向 C++ 本机控制口（127.0.0.1）发送命令并返回 JSON 响应。
+
+    cmd 既可以是字符串（status/start/stop/params/params.save），
+    也可以是带 payload 的字典（如 {"cmd": "params.apply", "values": {...}}）。
+    """
     if not control_port:
         return {"ok": False, "error": "录制控制口未配置"}
+    payload = {"cmd": cmd} if isinstance(cmd, str) else dict(cmd)
     try:
         with socket.create_connection(("127.0.0.1", int(control_port)), timeout=1.5) as sock:
-            sock.sendall(json.dumps({"cmd": cmd}).encode("utf-8") + b"\n")
+            sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
             sock.settimeout(5.0)
-            data = sock.recv(16384)
+            data = sock.recv(65536)
         if not data:
             return {"ok": False, "error": "录制控制口无响应"}
         return json.loads(data.decode("utf-8").strip())
@@ -324,6 +329,29 @@ def api_recorder():
     return jsonify(recorder_command("status", control_port))
 
 
+@app.route("/api/params", methods=["GET", "POST"])
+def api_params():
+    """运行时参数：查询（GET）与应用/保存（POST）。
+
+    GET  -> 转发控制口 params，返回 running / saved / dirty / params 元数据；
+    POST -> {"cmd":"apply","values":{...}} 应用运行参数，或 {"cmd":"save"} 写入 YAML。
+    校验与生效以 C++ 返回为准（C++ 运行时状态是实际生效值的权威来源）。
+    """
+    control_port = app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)
+    if request.method == "GET":
+        return jsonify(recorder_command("params", control_port))
+    payload = request.get_json(silent=True) or {}
+    cmd = payload.get("cmd")
+    if cmd == "apply":
+        values = payload.get("values")
+        if not isinstance(values, dict) or not values:
+            return jsonify({"ok": False, "error": "values 必须是非空对象"}), 400
+        return jsonify(recorder_command({"cmd": "params.apply", "values": values}, control_port))
+    if cmd == "save":
+        return jsonify(recorder_command("params.save", control_port))
+    return jsonify({"ok": False, "error": "cmd 必须是 apply / save"}), 400
+
+
 @app.route("/api/meta")
 def api_meta():
     """接口与字段说明（含 M2 预留接口位置）。"""
@@ -357,6 +385,10 @@ def _service_info():
         "m2": {
             "recorder": "/api/recorder (GET 状态 / POST start|stop)",
             "playback": "独立回放服务 web_debug/playback.py（--dir/--root）",
+        },
+        "m3": {
+            "params": "/api/params (GET 运行参数/配置值 / POST apply|save)",
+            "events": "录制会话 events.jsonl（参数修改事件，回放页签展示）",
         },
         # M3+ 预留：电控遥测、参数管理
         "reserved": {

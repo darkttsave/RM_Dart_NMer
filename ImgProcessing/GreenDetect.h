@@ -109,6 +109,17 @@ public:
         distNearThresh_ = nearThresh;
     }
 
+    // ===== M3：运行时参数热更新入口（只赋值，不改变算法判定逻辑）=====
+    void setRequiredFrames(int v) { if (v > 0) requiredFrames_ = v; }
+    void setRequiredLostFrames(int v) { if (v > 0) requiredLostFrames_ = v; }
+    void setMaxCenterDist(float v) { if (v > 0.0f) maxCenterDist_ = v; }
+    void setMorphology(int kernelSize, int openIterations, int closeIterations)
+    {
+        kernelSize_ = kernelSize;
+        openIterations_ = openIterations;
+        closeIterations_ = closeIterations;
+    }
+
 private:
     /**
      * @brief 预处理图像，提取绿色通道

@@ -328,3 +328,59 @@ input.frame-input{width:120px; font-family:ui-monospace,SFMono-Regular,Menlo,Con
   .video-foot .hide-sm{display:none;}
   .bottombar .hide-sm{display:none;}
 }
+
+/* ---------- 参数调整页签（M3）：运行参数 / 配置值 / 应用与保存 ---------- */
+.param-toolbar{display:flex; align-items:center; gap:6px; flex-wrap:wrap; flex:0 0 auto;
+  padding:5px 8px; background:rgba(21,27,35,.6); border:1px solid var(--border-soft);
+  border-radius:var(--radius-sm);}
+.param-toolbar .group{display:flex; align-items:center; gap:6px;}
+.param-toolbar .label{font-size:11px; color:var(--muted);}
+.param-toolbar .meta{font-size:10.5px; color:var(--dim); font-variant-numeric:tabular-nums;}
+.param-message{flex:0 0 auto; font-size:11px; color:var(--dim); padding:5px 9px;
+  border:1px solid var(--border-soft); border-radius:var(--radius-xs); background:var(--panel3);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.param-message.ok{color:var(--green); border-color:rgba(63,185,80,.4);}
+.param-message.warn{color:var(--yellow); border-color:rgba(210,153,34,.4);}
+.param-message.err{color:var(--red); border-color:rgba(248,81,73,.4);}
+.param-message.wrap{white-space:normal; line-height:1.6;}
+.param-groups{display:flex; flex-direction:column; gap:8px; flex:1 1 auto; min-height:0; overflow-y:auto;}
+.param-groups::-webkit-scrollbar{width:8px;}
+.param-groups::-webkit-scrollbar-thumb{background:#233040; border-radius:4px;}
+.param-row{display:grid; grid-template-columns:minmax(0,1fr) 86px 30px 132px; gap:6px;
+  align-items:center; padding:2px 0; border-bottom:1px dashed rgba(31,41,55,.55);}
+.param-row:last-child{border-bottom:0;}
+.param-name{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.param-name b{color:var(--text); font-weight:500; margin-right:4px;}
+.param-name .mono{font-size:10px; color:var(--dim);}
+.param-row input.param-input{width:86px; padding:2px 6px; font-size:11.5px; text-align:right;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.param-row input.param-input.edited{border-color:rgba(210,153,34,.6); background:rgba(210,153,34,.06);}
+.param-unit{font-size:10px; color:var(--dim); white-space:nowrap;}
+.param-state{font-size:10.5px; color:var(--dim); text-align:right; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums;}
+.param-row.dirty .param-state{color:var(--yellow);}
+.param-row .param-state .run{color:var(--muted);}
+.param-row .param-state .cfg{color:var(--dim);}
+.param-row.mismatch .param-state .cfg{color:var(--orange);}
+
+/* ---------- 回放页：参数事件页签（M3） ---------- */
+.events-list{display:flex; flex-direction:column; gap:4px; flex:1 1 auto; min-height:0; overflow-y:auto;}
+.events-list::-webkit-scrollbar{width:8px;}
+.events-list::-webkit-scrollbar-thumb{background:#233040; border-radius:4px;}
+.event-item{display:grid; grid-template-columns:64px minmax(0,1fr) 92px 46px 62px; gap:6px;
+  align-items:center; padding:5px 8px; background:var(--panel3);
+  border:1px solid var(--border-soft); border-radius:var(--radius-xs);
+  font-size:11px; color:var(--muted); cursor:pointer; text-align:left; font-family:inherit;
+  width:100%;}
+.event-item:hover{border-color:rgba(88,166,255,.45); background:rgba(88,166,255,.06);}
+.event-item.active{border-color:rgba(210,153,34,.65); background:rgba(210,153,34,.09);}
+.event-time{color:var(--cyan); font-variant-numeric:tabular-nums;}
+.event-param{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.event-param b{color:var(--text); font-weight:500;}
+.event-param small{color:var(--dim); font-size:10px; margin-left:4px;}
+.event-change{color:var(--orange); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap;}
+.event-source{color:var(--dim); text-align:center; font-size:10.5px;}
+.event-result{text-align:right; font-size:10.5px; white-space:nowrap;}
+.event-result.ok{color:var(--green);}
+.event-result.err{color:var(--red);}
+.events-empty{color:var(--dim); font-size:11px; padding:10px 4px; line-height:1.7;}

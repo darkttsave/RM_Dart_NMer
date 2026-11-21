@@ -79,6 +79,8 @@
                 role="tab" aria-selected="true" aria-controls="tabStatus">状态面板</button>
         <button class="side-tab" id="tabBtnCharts" type="button"
                 role="tab" aria-selected="false" aria-controls="tabCharts">实时曲线</button>
+        <button class="side-tab" id="tabBtnParams" type="button"
+                role="tab" aria-selected="false" aria-controls="tabParams">参数调整</button>
       </nav>
       <div class="tab-panels">
 
@@ -185,6 +187,30 @@
             <div class="series-chips" id="seriesChips"></div>
           </details>
           <div class="charts" id="chartList"></div>
+        </div>
+
+        <!-- 页签 C：参数调整（M3）：C++ 运行参数是权威值，应用与保存分离 -->
+        <div class="tab-pane" id="tabParams" role="tabpanel" aria-labelledby="tabBtnParams" hidden>
+          <div class="param-toolbar">
+            <div class="group">
+              <span class="label">运行参数</span>
+              <span class="meta" id="paramState">--</span>
+            </div>
+            <div class="group" style="margin-left:auto;">
+              <button class="btn small primary" id="paramApplyBtn" type="button" disabled
+                      title="把下方修改写入 C++ 实际运行参数（立即生效）">应用修改</button>
+              <button class="btn small" id="paramSaveBtn" type="button" disabled
+                      title="把当前运行参数写入 config/debug.yaml（下次启动使用）">保存配置</button>
+              <button class="btn small ghost" id="paramReloadBtn" type="button"
+                      title="重新从 C++ 读取当前运行参数">重新读取</button>
+            </div>
+          </div>
+          <div class="param-message" id="paramMessage">从 C++ 视觉程序读取参数中…</div>
+          <div class="param-groups" id="paramGroups"></div>
+          <div class="note" style="margin-top:0; border-top:0; padding-top:0;">
+            应用：修改 C++ 实际运行参数（立即生效；录制期间写入 events.jsonl）；
+            保存：写入配置文件供下次启动使用。状态列格式为「运行值 / 配置文件值」。
+          </div>
         </div>
 
       </div>
@@ -294,20 +320,24 @@ const MAX_POINTS = 6000;
 let activeTab = "status";
 function switchTab(name) {
   activeTab = name;
-  const isStatus = name === "status";
-  $("tabStatus").hidden = !isStatus;
-  $("tabCharts").hidden = isStatus;
-  $("tabBtnStatus").classList.toggle("active", isStatus);
-  $("tabBtnCharts").classList.toggle("active", !isStatus);
-  $("tabBtnStatus").setAttribute("aria-selected", isStatus ? "true" : "false");
-  $("tabBtnCharts").setAttribute("aria-selected", isStatus ? "false" : "true");
-  if (!isStatus) {
+  const panes = { status: "tabStatus", charts: "tabCharts", params: "tabParams" };
+  const buttons = { status: "tabBtnStatus", charts: "tabBtnCharts", params: "tabBtnParams" };
+  for (const key of Object.keys(panes)) {
+    const isActive = key === name;
+    $(panes[key]).hidden = !isActive;
+    $(buttons[key]).classList.toggle("active", isActive);
+    $(buttons[key]).setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+  if (name === "charts") {
     // 页签从隐藏切换为可见后，canvas 布局尺寸才有效，必须重绘一次
     requestAnimationFrame(() => { ensureChartCards(); drawAll(); });
+  } else if (name === "params") {
+    refreshParams(true);
   }
 }
 $("tabBtnStatus").addEventListener("click", () => switchTab("status"));
 $("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
+$("tabBtnParams").addEventListener("click", () => switchTab("params"));
 
 // ---------------------------------------------------------------------------
 // 实时曲线：字段定义（每个字段独立纵轴，避免不同量纲混用）
@@ -824,6 +854,262 @@ document.addEventListener("keydown", (e) => {
 });
 
 setInterval(refreshRecorder, 2000);
+
+// ---------------------------------------------------------------------------
+// 参数调整（M3）
+//   - C++ 运行时参数是实际生效值的权威来源，Flask 只转发；
+//   - 应用（改运行值）与保存（写 YAML）分离；
+//   - 录制期间的应用会由 C++ 写入 events.jsonl，回放页签可查看并跳转。
+// ---------------------------------------------------------------------------
+const paramState = {
+  defs: [],
+  running: {},
+  saved: {},
+  dirty: [],
+  configPath: "",
+  available: false,
+  edited: new Set(),
+};
+
+const PARAM_GROUP_META = {
+  color: { title: "颜色识别", sub: "亮度 / 绿色权重" },
+  shape: { title: "候选目标筛选", sub: "面积 / 形状 / 形态学" },
+  tracking: { title: "追踪与连续帧判断", sub: "确认 / 丢失 / 跳变" },
+  turn: { title: "转向与距离", sub: "转向阈值 / 距离阶段" },
+  camera: { title: "相机参数", sub: "每帧下发" },
+};
+const PARAM_GROUP_ORDER = ["color", "shape", "tracking", "turn", "camera"];
+
+function paramFieldDef(name) {
+  return paramState.defs.find((d) => d.name === name) || null;
+}
+
+function paramText(value, type) {
+  if (type === "int") return String(Math.round(Number(value)));
+  return Number(value).toFixed(4).replace(/\.?0+$/, "");
+}
+
+let paramMessageHoldUntil = 0;
+
+function setParamMessage(text, cls, holdMs) {
+  const el = $("paramMessage");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "param-message" + (cls ? " " + cls : "");
+  paramMessageHoldUntil = holdMs ? Date.now() + holdMs : 0;
+}
+
+function syncParamButtons() {
+  const applyBtn = $("paramApplyBtn");
+  if (applyBtn) applyBtn.disabled = paramState.edited.size === 0;
+  const saveBtn = $("paramSaveBtn");
+  if (saveBtn) saveBtn.disabled = paramState.dirty.length === 0;
+}
+
+function updateParamToolbar() {
+  const stateEl = $("paramState");
+  if (stateEl) {
+    stateEl.textContent = paramState.configPath
+      ? `配置：${paramState.configPath}`
+      : "配置：--";
+    stateEl.title = paramState.configPath || "";
+  }
+  if (!paramState.available) return;
+  if (Date.now() < paramMessageHoldUntil) return; // 保留应用/保存的动作结果提示
+  if (paramState.edited.size) {
+    setParamMessage(`未应用修改 ${paramState.edited.size} 项（点击「应用修改」写入 C++ 运行参数）`, "warn");
+  } else if (paramState.dirty.length) {
+    setParamMessage(`运行参数已生效，其中 ${paramState.dirty.length} 项尚未保存到配置文件`, "warn");
+  } else {
+    setParamMessage("运行参数与配置文件一致", "ok");
+  }
+  const applyBtn = $("paramApplyBtn");
+  if (applyBtn) applyBtn.disabled = paramState.edited.size === 0;
+  const saveBtn = $("paramSaveBtn");
+  if (saveBtn) saveBtn.disabled = paramState.dirty.length === 0;
+}
+
+function updateParamRow(row, def, running, saved) {
+  const input = row.querySelector("input.param-input");
+  const stateEl = row.querySelector(".param-state");
+  if (!input || !stateEl) return;
+  const edited = paramState.edited.has(def.name);
+  if (!edited) input.value = paramText(running, def.type);
+  input.classList.toggle("edited", edited);
+  row.classList.toggle("dirty", edited);
+  row.classList.toggle("mismatch", Math.abs(running - saved) > 1e-9);
+  stateEl.innerHTML =
+    `<span class="run">${paramText(running, def.type)}</span> / ` +
+    `<span class="cfg">${paramText(saved, def.type)}</span>`;
+  stateEl.title = `运行值 ${paramText(running, def.type)} / 配置文件值 ${paramText(saved, def.type)}`;
+}
+
+function renderParamGroups() {
+  const host = $("paramGroups");
+  if (!host) return;
+  host.innerHTML = "";
+  for (const group of PARAM_GROUP_ORDER) {
+    const defs = paramState.defs.filter((d) => d.group === group);
+    if (!defs.length) continue;
+    const meta = PARAM_GROUP_META[group] || { title: group, sub: "" };
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    const head = document.createElement("div");
+    head.className = "panel-head";
+    head.innerHTML = `<h2>${meta.title}<span class="panel-sub">${meta.sub}</span></h2>` +
+      `<span class="tag">${defs.length} 项 · 运行/配置</span>`;
+    const body = document.createElement("div");
+    body.className = "panel-body";
+    for (const def of defs) {
+      const row = document.createElement("div");
+      row.className = "param-row";
+      row.dataset.name = def.name;
+      const name = document.createElement("span");
+      name.className = "param-name";
+      name.title = `${def.name} · 范围 ${def.min}~${def.max}` +
+        (def.unit ? ` ${def.unit}` : "") + (def.hint ? ` · ${def.hint}` : "");
+      name.innerHTML = `<b>${def.label}</b><span class="mono">${def.name}</span>`;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.className = "param-input";
+      input.dataset.name = def.name;
+      input.min = def.min;
+      input.max = def.max;
+      input.step = def.type === "int" ? "1" : (Number(def.max) <= 2 ? "0.01" : "0.1");
+      input.title = `范围 ${def.min}~${def.max}` + (def.unit ? `（${def.unit}）` : "");
+      input.addEventListener("input", onParamInput);
+      input.addEventListener("change", onParamInput);
+      const unit = document.createElement("span");
+      unit.className = "param-unit";
+      unit.textContent = def.unit || "";
+      const stateEl = document.createElement("span");
+      stateEl.className = "param-state";
+      row.appendChild(name);
+      row.appendChild(input);
+      row.appendChild(unit);
+      row.appendChild(stateEl);
+      body.appendChild(row);
+    }
+    panel.appendChild(head);
+    panel.appendChild(body);
+    host.appendChild(panel);
+  }
+}
+
+function onParamInput(event) {
+  const input = event.target;
+  const name = input.dataset.name;
+  const def = paramFieldDef(name);
+  if (!def) return;
+  const text = String(input.value).trim();
+  const num = Number(text);
+  const running = Number(paramState.running[name]);
+  const differs = text !== "" && Number.isFinite(num) && Math.abs(num - running) > 1e-9;
+  if (differs) paramState.edited.add(name);
+  else paramState.edited.delete(name);
+  const row = input.closest(".param-row");
+  if (row) {
+    input.classList.toggle("edited", differs);
+    row.classList.toggle("dirty", differs);
+  }
+  updateParamToolbar();
+}
+
+function applyParamData(data) {
+  paramState.available = !!data && data.ok !== false && !!data.running;
+  if (!paramState.available) {
+    setParamMessage((data && data.error) || "参数服务不可用（C++ 视觉程序未运行？）", "err");
+    const applyBtn = $("paramApplyBtn");
+    const saveBtn = $("paramSaveBtn");
+    if (applyBtn) applyBtn.disabled = true;
+    if (saveBtn) saveBtn.disabled = true;
+    return;
+  }
+  const firstBuild = paramState.defs.length === 0;
+  paramState.defs = data.params || [];
+  paramState.running = data.running || {};
+  paramState.saved = data.saved || {};
+  paramState.dirty = data.dirty || [];
+  paramState.configPath = data.config_path || "";
+  if (firstBuild) renderParamGroups();
+  for (const row of document.querySelectorAll("#paramGroups .param-row")) {
+    const def = paramFieldDef(row.dataset.name);
+    if (!def) continue;
+    updateParamRow(row, def, Number(paramState.running[def.name]), Number(paramState.saved[def.name]));
+  }
+  updateParamToolbar();
+}
+
+async function refreshParams(force) {
+  if (!force && activeTab !== "params") return;
+  try {
+    const resp = await fetch("/api/params", { cache: "no-store" });
+    const data = await resp.json();
+    applyParamData(data);
+  } catch (error) {
+    applyParamData({ ok: false, error: "参数服务连接失败" });
+  }
+}
+
+async function applyParams() {
+  if (!paramState.edited.size) return;
+  const values = {};
+  for (const name of paramState.edited) {
+    const input = document.querySelector(`#paramGroups input[data-name="${name}"]`);
+    if (input) values[name] = Number(input.value);
+  }
+  setParamMessage("正在应用参数…", "");
+  try {
+    const resp = await fetch("/api/params", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: "apply", values }),
+    });
+    const data = await resp.json();
+    if (data.ok === false) {
+      setParamMessage(`应用失败：${data.error || "未知错误"}`, "err", 6000);
+      return;
+    }
+    paramState.edited.clear();
+    applyParamData(data.params || { ok: false, error: "返回数据缺失" });
+    const names = String(data.applied || "").split(",").filter(Boolean);
+    setParamMessage(`已应用 ${names.length} 项（${names.join("、")}）；尚未保存到配置文件`, "ok", 6000);
+    syncParamButtons();
+  } catch (error) {
+    setParamMessage("应用失败：无法连接后端", "err", 6000);
+    syncParamButtons();
+  }
+}
+
+async function saveParams() {
+  setParamMessage("正在保存配置…", "");
+  try {
+    const resp = await fetch("/api/params", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: "save" }),
+    });
+    const data = await resp.json();
+    if (data.ok === false) {
+      setParamMessage(`保存失败：${data.error || "未知错误"}`, "err", 6000);
+      return;
+    }
+    applyParamData(data.params || { ok: false, error: "返回数据缺失" });
+    setParamMessage(`配置已保存：${data.saved_to || ""}`, "ok", 6000);
+    syncParamButtons();
+  } catch (error) {
+    setParamMessage("保存失败：无法连接后端", "err", 6000);
+    syncParamButtons();
+  }
+}
+
+$("paramApplyBtn").addEventListener("click", applyParams);
+$("paramSaveBtn").addEventListener("click", saveParams);
+$("paramReloadBtn").addEventListener("click", () => {
+  paramState.edited.clear();
+  refreshParams(true);
+});
+setInterval(() => { if (activeTab === "params") refreshParams(false); }, 3000);
 
 // ---------------------------------------------------------------------------
 // 启动

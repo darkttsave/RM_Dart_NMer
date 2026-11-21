@@ -58,7 +58,7 @@ web_debug:
 # M2 数据录制（不依赖 Flask/浏览器；Flask 未启动或浏览器未打开时照常录制）
 recording:
   enabled: true          # 录制系统总开关（--no-record 可覆盖）
-  auto_start: true       # 程序启动即开始录制
+  auto_start: false      # 程序启动不自动录制（预览调试时网页手动开始；无预览录制用 --auto-record 或 ./run_web_debug.sh --record-only）
   root: "recordings"     # 会话根目录（相对项目根），每次录制生成独立子目录
   video_scale: 1         # 视频缩放：1=调试画面原尺寸（原实现固定 3 倍放大，无信息增益且 IO 大）
   video_fps: 30          # AVI 标称帧率（仅播放器默认速度；真实帧时间以 video_index_001.csv 为准）
