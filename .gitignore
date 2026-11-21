@@ -18,3 +18,7 @@ CameraDriver/docs/相机启动流程.png
 
 # ---- 实拍测试图片（不公开）----
 test/test.png
+
+# ---- Python 缓存 ----
+__pycache__/
+*.pyc

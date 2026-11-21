@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DART 视觉 Web 调试 · M1 启动脚本
+#
+# 用途：启动 Flask 调试后端 + C++ 视觉主程序（可选模拟视频源，无需工业相机）。
+#
+# 用法：
+#   ./run_web_debug.sh                        # 工业相机 + 真实串口（原有默认行为）
+#   ./run_web_debug.sh --source synthetic     # 无相机：合成绿色引导灯视频源
+#   ./run_web_debug.sh --source image:test/test.png --no-serial --no-gui
+#   ./run_web_debug.sh --backend-only         # 只启动 Flask（视觉程序另行启动）
+#
+# 说明：
+#   - Flask 与视觉程序是两个独立进程，调试系统故障不会影响视觉/串口主链路；
+#   - 浏览器地址默认 http://127.0.0.1:5000/ ；
+#   - 调试数据口（C++ -> Flask）默认 127.0.0.1:5010。
+# =============================================================================
+set -u
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD_DIR="$ROOT_DIR/build"
+LOG_DIR="$ROOT_DIR/logs/web_debug_m1"
+mkdir -p "$LOG_DIR"
+
+WEB_HOST="${WEB_HOST:-127.0.0.1}"
+WEB_PORT="${WEB_PORT:-5000}"
+DATA_HOST="${DATA_HOST:-127.0.0.1}"
+DATA_PORT="${DATA_PORT:-5010}"
+BACKEND_ONLY=0
+
+ARGS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --backend-only)
+            BACKEND_ONLY=1
+            shift
+            ;;
+        --source)
+            spec="${2:-}"
+            shift 2 || shift
+            # image:/video: 的相对路径按项目根目录解析（main 在 build/ 目录下运行）
+            case "$spec" in
+                image:*|video:*)
+                    kind="${spec%%:*}"
+                    path="${spec#*:}"
+                    case "$path" in
+                        /*) ;;
+                        *) path="$ROOT_DIR/$path" ;;
+                    esac
+                    ARGS+=("--source" "$kind:$path")
+                    ;;
+                *)
+                    ARGS+=("--source" "$spec")
+                    ;;
+            esac
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# ---- 1. 启动 Flask 调试后端 ----
+echo "[run_web_debug] 启动调试后端: http://$WEB_HOST:$WEB_PORT/ (数据口 $DATA_HOST:$DATA_PORT)"
+python3 "$ROOT_DIR/web_debug/app.py" \
+    --host "$WEB_HOST" --port "$WEB_PORT" \
+    --data-host "$DATA_HOST" --data-port "$DATA_PORT" \
+    > "$LOG_DIR/flask.log" 2>&1 &
+FLASK_PID=$!
+echo "$FLASK_PID" > "$LOG_DIR/flask.pid"
+
+cleanup() {
+    if kill -0 "$FLASK_PID" 2>/dev/null; then
+        echo "[run_web_debug] 停止调试后端 (pid=$FLASK_PID)"
+        kill "$FLASK_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+sleep 1
+if ! kill -0 "$FLASK_PID" 2>/dev/null; then
+    echo "[run_web_debug] 错误：调试后端启动失败，日志：$LOG_DIR/flask.log" >&2
+    tail -5 "$LOG_DIR/flask.log" >&2 || true
+    exit 1
+fi
+echo "[run_web_debug] 调试后端已启动 (pid=$FLASK_PID, 日志 $LOG_DIR/flask.log)"
+
+if [ "$BACKEND_ONLY" -eq 1 ]; then
+    echo "[run_web_debug] --backend-only：保持后端运行，Ctrl+C 退出"
+    wait "$FLASK_PID"
+    exit 0
+fi
+
+# ---- 2. 检查并构建主程序 ----
+if [ ! -x "$BUILD_DIR/main" ]; then
+    echo "[run_web_debug] 未找到 build/main，先构建..."
+    cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null || exit 1
+    nice -n 19 cmake --build "$BUILD_DIR" -j2 || exit 1
+fi
+
+# ---- 3. 启动视觉主程序 ----
+# 若配置了海康 SDK 到系统路径之外，main 链接时已写入 rpath（见 CMakeLists.txt）
+echo "[run_web_debug] 启动视觉主程序（附加参数：${ARGS[*]:-无}）"
+(
+    cd "$BUILD_DIR" && ./main "${ARGS[@]}"
+)
+MAIN_RC=$?
+echo "[run_web_debug] 视觉主程序退出 (code=$MAIN_RC)"
+exit "$MAIN_RC"

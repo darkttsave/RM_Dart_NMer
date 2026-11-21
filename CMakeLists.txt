@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(Threads REQUIRED)
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -68,13 +69,31 @@ set(ALL_SOURCES
 
 include_directories(${HIK_SDK_INCLUDE_DIR})
 
+# 调试数据发布层（M1）：不依赖海康 SDK，便于单独复用与测试
+add_library(web_debug STATIC
+    web_debug/DebugTelemetry.cpp
+    web_debug/FrameSource.cpp
+)
+target_link_libraries(web_debug
+    ${OpenCV_LIBS}
+    Threads::Threads
+)
+
 add_executable(main ${ALL_SOURCES})
 
 target_link_libraries(main
     ${OpenCV_LIBS}
     yaml-cpp
     ${HIK_SDK_LIBRARY}
+    Threads::Threads
+    web_debug
 )
+
+# 让 main 可直接运行（海康 SDK 的 .so 位于 SDK/lib，不进系统路径）
+get_filename_component(HIK_SDK_LIB_DIR "${HIK_SDK_LIBRARY}" DIRECTORY)
+if(HIK_SDK_LIB_DIR)
+    set_target_properties(main PROPERTIES BUILD_RPATH "${HIK_SDK_LIB_DIR}")
+endif()
 
 add_executable(test_green_detect
     test/test_green_detect.cpp

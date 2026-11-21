@@ -62,6 +62,24 @@ public:
      */
     Mat getBinaryImage() const { return binaryImage_; }
 
+    // ===== 调试数据只读接口（M1 新增，不改变算法行为）=====
+    /** @brief 当前是否处于连续帧确认后的追踪状态 */
+    bool isTracking() const { return tracking_; }
+    /** @brief 当前连续命中帧数 */
+    int getConsecutiveFrames() const { return consecutiveFrames_; }
+    /** @brief 进入追踪所需的连续命中帧数 */
+    int getRequiredFrames() const { return requiredFrames_; }
+    /** @brief 当前连续丢失帧数 */
+    int getLostFrames() const { return lostFrames_; }
+    /** @brief 进入丢失状态所需的连续丢失帧数 */
+    int getRequiredLostFrames() const { return requiredLostFrames_; }
+    /** @brief 最近一帧绿色二值图非零像素数 */
+    int getGreenPixelCount() const { return greenPixelCount_; }
+    /** @brief 最近一帧通过形状/面积筛选的候选轮廓数量 */
+    int getCandidateCount() const { return candidateCount_; }
+    /** @brief 当前图像中心（像素） */
+    Point2f getImageCenter() const { return imageCenter_; }
+
     /**
      * @brief 设置转向阈值
      * @param threshold 转向阈值（像素）
@@ -151,6 +169,10 @@ private:
     // 调试图像
     Mat debugImage_;  // 调试图像
     Mat binaryImage_; // 二值化图像
+
+    // 调试数据（只读快照，供 Web 调试层读取，不参与算法判定）
+    int greenPixelCount_ = 0; // 最近一帧绿色二值图非零像素数
+    int candidateCount_ = 0;  // 最近一帧通过筛选的候选轮廓数
 };
 
 #endif // GREEN_TARGET_DETECTOR_H

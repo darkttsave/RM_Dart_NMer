@@ -1,7 +1,7 @@
 # 飞镖制导系统配置文件
 
 camera:
-  exposure: 3200
+  exposure: 4000
   gain: 10
   manual_exposure: true
   serial_number: "DA3694227"
@@ -23,7 +23,7 @@ detection:
   max_radius: 30
 
   time_filter:
-    required_frames: 10       # 连续识别到N帧后进入追踪状态
+    required_frames: 5      # 连续识别到N帧后进入追踪状态
     required_lost_frames: 10  # 连续识别不到N帧后进入丢失状态
     max_center_dist: 100.0    # 中心点最大移动距离（像素），超出则重置计数
 
@@ -40,9 +40,17 @@ detection:
     min_aspect_ratio: 0.5  # 外接矩形宽高比下限
     max_aspect_ratio: 2.0  # 外接矩形宽高比上限
     min_area: 50           # 轮廓最小面积（像素²）
-    max_area: 50000        # 轮廓最大面积（像素²）
+    max_area: 5000        # 轮廓最大面积（像素²）
 
 communication:
   port: "/dev/ttyACM0"
   baudrate: 115200
   watchdog: true  # true=发送失败时程序退出(配合watchdog.sh重启); false=切换模拟模式
+
+# M1 Web 调试数据发布（独立后台线程；Flask/浏览器未连接时自动丢弃调试帧，不影响主链路）
+web_debug:
+  enabled: true          # false=完全关闭调试数据发布
+  host: "127.0.0.1"      # Flask 调试数据接收地址（仅本机）
+  port: 5010             # Flask 调试数据接收端口
+  publish_fps: 20        # 调试帧发布频率（与视觉主循环解耦）
+  jpeg_quality: 75       # 调试画面 JPEG 质量

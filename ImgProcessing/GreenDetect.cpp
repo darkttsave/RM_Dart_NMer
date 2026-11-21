@@ -117,6 +117,8 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
     result.center = Point2f(0, 0);
     result.radius = 0;
     result.boundingBox = Rect(0, 0, 0, 0);
+    greenPixelCount_ = 0;
+    candidateCount_ = 0;
 
     if (image.empty() || image.channels() != 3 || image.depth() != CV_8U ||
         image.cols < 100 || image.rows < 100)
@@ -129,6 +131,7 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
 
     // 判断视野内是否有绿色像素
     int greenPixels = cv::countNonZero(greenBinary);
+    greenPixelCount_ = greenPixels;
     if (greenPixels == 0)
     {
         result.distanceFlag = 3.0f;
@@ -274,6 +277,14 @@ Mat GreenDetect::preprocessGreenChannel(const Mat &image)
     Mat binary;
     cv::bitwise_and(brightMask, greenMask, binary);
 
+    // 绿色相对优势：G 必须同时强于 R 和 B，排除青色/蓝色/黄色
+    // （2026-07-24 队内最新改动，同步自桌面现场代码）
+    Mat gGreaterB, gGreaterR, dominantMask;
+    cv::compare(bgr[1], bgr[0], gGreaterB, cv::CMP_GT); // G > B
+    cv::compare(bgr[1], bgr[2], gGreaterR, cv::CMP_GT); // G > R
+    cv::bitwise_and(gGreaterB, gGreaterR, dominantMask);
+    cv::bitwise_and(binary, dominantMask, binary);
+
     int kSize = (kernelSize_ % 2 == 0) ? kernelSize_ + 1 : kernelSize_;
     Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kSize, kSize));
     for (int i = 0; i < openIterations_; i++)
@@ -288,6 +299,7 @@ Mat GreenDetect::preprocessGreenChannel(const Mat &image)
 std::vector<Vec3f> GreenDetect::detectCircles(const Mat &binaryImage)
 {
     std::vector<Vec3f> circles;
+    candidateCount_ = 0;
     if (binaryImage.empty() || binaryImage.channels() != 1)
         return circles;
 
@@ -298,6 +310,7 @@ std::vector<Vec3f> GreenDetect::detectCircles(const Mat &binaryImage)
 
     double maxArea = 0;
     int bestIdx = -1;
+    int passedCount = 0;
     for (int i = 0; i < (int)contours.size(); i++)
     {
         double area = cv::contourArea(contours[i]);
@@ -346,12 +359,14 @@ std::vector<Vec3f> GreenDetect::detectCircles(const Mat &binaryImage)
         if (!okArea || perimeter < 1.0 || !okCirc || !okAR)
             continue;
 
+        passedCount++;
         if (area > maxArea)
         {
             maxArea = area;
             bestIdx = i;
         }
     }
+    candidateCount_ = passedCount;
     if (bestIdx < 0)
         return circles;
 
