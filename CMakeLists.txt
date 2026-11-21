@@ -73,6 +73,7 @@ include_directories(${HIK_SDK_INCLUDE_DIR})
 add_library(web_debug STATIC
     web_debug/DebugTelemetry.cpp
     web_debug/FrameSource.cpp
+    web_debug/Recorder.cpp
 )
 target_link_libraries(web_debug
     ${OpenCV_LIBS}

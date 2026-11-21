@@ -34,6 +34,7 @@ HEADER = struct.Struct("<4sBBHII")  # 16 bytes
 MAX_JSON_BYTES = 256 * 1024
 MAX_JPEG_BYTES = 8 * 1024 * 1024
 STALE_AFTER_S = 1.5          # 超过该时间无新帧，前端视为"数据过期"
+DEFAULT_CONTROL_PORT = 5011  # C++ 录制控制口（仅本机回环），/api/recorder 转发到这里
 HISTORY_MAXLEN = 1800        # SSE 曲线样本缓存（约 20fps * 90s）
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -213,6 +214,25 @@ class FrameReceiver(threading.Thread):
 
 
 # --------------------------------------------------------------------------
+# 录制控制（转发到 C++ 本机控制口；Flask 只是控制入口，录制执行主体在 C++ 侧）
+# --------------------------------------------------------------------------
+def recorder_command(cmd, control_port=DEFAULT_CONTROL_PORT):
+    """向 C++ 录制控制口（127.0.0.1）发送 status/start/stop，返回其 JSON 响应。"""
+    if not control_port:
+        return {"ok": False, "error": "录制控制口未配置"}
+    try:
+        with socket.create_connection(("127.0.0.1", int(control_port)), timeout=1.5) as sock:
+            sock.sendall(json.dumps({"cmd": cmd}).encode("utf-8") + b"\n")
+            sock.settimeout(5.0)
+            data = sock.recv(16384)
+        if not data:
+            return {"ok": False, "error": "录制控制口无响应"}
+        return json.loads(data.decode("utf-8").strip())
+    except (OSError, ValueError) as error:
+        return {"ok": False, "error": f"录制控制口不可用: {error}"}
+
+
+# --------------------------------------------------------------------------
 # Flask 路由
 # --------------------------------------------------------------------------
 receiver: FrameReceiver = None  # 在 main 中创建
@@ -285,6 +305,25 @@ def api_telemetry_stream():
                              "Connection": "keep-alive"})
 
 
+@app.route("/api/recorder", methods=["GET", "POST"])
+def api_recorder():
+    """录制状态查询（GET）与开始/停止（POST）。
+
+    POST body: {"cmd": "start"|"stop"|"status"} 或 {"enabled": true|false}
+    实际录制由 C++ 主程序执行，本接口仅转发到其本机控制口（127.0.0.1）。
+    """
+    control_port = app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        cmd = payload.get("cmd")
+        if not cmd and "enabled" in payload:
+            cmd = "start" if payload.get("enabled") else "stop"
+        if cmd not in ("start", "stop", "status"):
+            return jsonify({"ok": False, "error": "cmd 必须是 start/stop/status"}), 400
+        return jsonify(recorder_command(cmd, control_port))
+    return jsonify(recorder_command("status", control_port))
+
+
 @app.route("/api/meta")
 def api_meta():
     """接口与字段说明（含 M2 预留接口位置）。"""
@@ -314,12 +353,15 @@ def _service_info():
             "telemetry_stream": "/api/telemetry/stream (SSE)",
             "meta": "/api/meta",
         },
-        # M2 预留：电控遥测、参数管理、录制控制、历史回放
-        "reserved_for_m2": {
+        # M2 已实现：录制控制（转发到 C++ 本机控制口）；其余仍预留
+        "m2": {
+            "recorder": "/api/recorder (GET 状态 / POST start|stop)",
+            "playback": "独立回放服务 web_debug/playback.py（--dir/--root）",
+        },
+        # M3+ 预留：电控遥测、参数管理
+        "reserved": {
             "board_telemetry": "/api/board/telemetry (预留)",
             "parameters": "/api/config (预留)",
-            "recorder": "/api/recorder (预留)",
-            "replay": "/api/replay/sessions (预留)",
         },
     }
 
@@ -339,8 +381,11 @@ def main():
     parser.add_argument("--port", type=int, default=5000, help="浏览器访问端口（默认 5000）")
     parser.add_argument("--data-host", default="127.0.0.1", help="接收 C++ 调试帧的监听地址")
     parser.add_argument("--data-port", type=int, default=5010, help="接收 C++ 调试帧的端口（默认 5010）")
+    parser.add_argument("--control-port", type=int, default=DEFAULT_CONTROL_PORT,
+                        help="C++ 录制控制口（默认 5011；0=禁用 /api/recorder）")
     args = parser.parse_args()
 
+    app.config["RECORDER_CONTROL_PORT"] = args.control_port
     create_receiver(args.data_host, args.data_port)
     print(f"[backend] Web 调试界面: http://{args.host}:{args.port}/", flush=True)
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)

@@ -3,299 +3,236 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DART 视觉调试 · M1</title>
+<title>DART 视觉调试台 · 实时监测</title>
+<!-- M2-UI：实时监测界面重构（顶栏 / 左侧视频 / 右侧页签 / 底栏） -->
+<link rel="stylesheet" href="/static/dashboard.css?v=m2ui">
 <style>
-:root{
-  --bg:#0a0e13; --panel:#11161d; --panel2:#151b23; --border:#1f2937;
-  --text:#e6edf3; --muted:#8b949e; --dim:#6e7681;
-  --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff;
-  --cyan:#39d2c0; --purple:#bc8cff; --orange:#ff8a4c;
+/* 实时页少量覆盖样式（通用样式见 /static/dashboard.css） */
+.record-btn{
+  background:rgba(63,185,80,.12); border:1px solid rgba(63,185,80,.45); color:var(--green);
+  border-radius:6px; padding:3px 10px; font-size:11px; font-family:inherit; cursor:pointer;
+  white-space:nowrap; flex:0 0 auto;
 }
-*{box-sizing:border-box; margin:0; padding:0;}
-html,body{height:100%;}
-body{
-  background:var(--bg); color:var(--text);
-  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
-  font-size:13px; line-height:1.5; overflow:hidden;
-}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
-
-/* ---------- 顶栏 ---------- */
-header{
-  height:52px; display:flex; align-items:center; gap:10px; padding:0 14px;
-  background:linear-gradient(180deg,#131a23,#0e131a); border-bottom:1px solid var(--border);
-}
-.brand{display:flex; align-items:baseline; gap:8px; margin-right:6px;}
-.brand b{font-size:16px; letter-spacing:2px; color:#fff;}
-.brand span{font-size:12px; color:var(--dim); letter-spacing:1px;}
-.chip{
-  display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:999px;
-  font-size:11px; border:1px solid var(--border); color:var(--muted); white-space:nowrap;
-  background:rgba(255,255,255,.02);
-}
-.chip.ok{color:var(--green); border-color:rgba(63,185,80,.45); background:rgba(63,185,80,.10);}
-.chip.warn{color:var(--yellow); border-color:rgba(210,153,34,.45); background:rgba(210,153,34,.10);}
-.chip.err{color:var(--red); border-color:rgba(248,81,73,.45); background:rgba(248,81,73,.10);}
-.chip.info{color:var(--blue); border-color:rgba(88,166,255,.45); background:rgba(88,166,255,.10);}
-.chip .dot{width:7px; height:7px; border-radius:50%; background:currentColor; box-shadow:0 0 6px currentColor;}
-.spacer{flex:1;}
-#clock{font-size:12px; color:var(--muted);}
-
-/* ---------- 主布局 ---------- */
-.layout{
-  display:grid; grid-template-columns:minmax(0,1fr) 484px; grid-template-rows:minmax(0,1fr); gap:10px;
-  padding:10px; height:calc(100vh - 52px - 40px);
-}
-.stage{
-  position:relative; min-width:0; height:100%; border:1px solid var(--border); border-radius:10px; overflow:hidden;
-  background:
-    repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 40px),
-    repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 40px),
-    #06090d;
-  display:flex; align-items:center; justify-content:center;
-}
-#videoImage{
-  max-width:100%; max-height:100%; width:auto; height:auto; display:block; object-fit:contain;
-  image-rendering:auto;
-}
-.stage-overlay{
-  position:absolute; inset:0; pointer-events:none;
-  display:flex; flex-direction:column; justify-content:space-between; padding:12px;
-}
-.stage-top{display:flex; justify-content:flex-end; align-items:flex-start; gap:8px;}
-.stage-badge{
-  font-size:11px; letter-spacing:.5px; padding:3px 8px; border-radius:4px;
-  background:rgba(6,9,13,.72); border:1px solid var(--border); color:var(--muted);
-}
-.stage-badge.live{color:var(--green); border-color:rgba(63,185,80,.4);}
-.stage-placeholder{
-  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:8px; color:var(--dim); background:rgba(6,9,13,.72); text-align:center; padding:20px;
-}
-.stage-placeholder b{color:var(--muted); font-weight:600; letter-spacing:1px;}
-.stage-placeholder small{font-size:11px; line-height:1.7;}
-.stage-placeholder.hidden{display:none;}
-.stage-bottom{display:flex; justify-content:space-between; gap:8px;}
-
-/* ---------- 右侧面板 ---------- */
-.side{display:flex; flex-direction:column; gap:10px; min-height:0; height:100%; overflow-y:auto; padding-right:2px;}
-.side::-webkit-scrollbar{width:8px;}
-.side::-webkit-scrollbar-thumb{background:#233040; border-radius:4px;}
-.card{background:var(--panel); border:1px solid var(--border); border-radius:9px; overflow:hidden; flex:0 0 auto;}
-/* 实时曲线卡自动占满剩余高度，避免 1080p 下溢出 */
-.card.charts-card{flex:1 1 auto; display:flex; flex-direction:column; min-height:190px;}
-.card-head{
-  display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:7px 12px; background:var(--panel2); border-bottom:1px solid var(--border);
-  font-size:11.5px; letter-spacing:1px; color:var(--muted); text-transform:uppercase;
-}
-.card-head .tag{font-size:10px; letter-spacing:.5px; color:var(--dim); text-transform:none;}
-.card-body{padding:9px 12px 11px;}
-.grid2{display:grid; grid-template-columns:1fr 1fr; gap:6px 16px;}
-.kv{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
-.kv .k{color:var(--muted); font-size:11.5px; white-space:nowrap;}
-.kv .v{font-size:13px; color:var(--text); text-align:right; white-space:nowrap;}
-.kv .v.big{font-size:15px; font-weight:600;}
-.v.ok{color:var(--green);} .v.err{color:var(--red);} .v.warn{color:var(--yellow);}
-.v.muted{color:var(--dim);} .v.blue{color:var(--blue);} .v.cyan{color:var(--cyan);} .v.orange{color:var(--orange);}
-
-.state-line{display:flex; align-items:center; gap:10px; margin-bottom:8px;}
-.state-big{font-size:16px; font-weight:700; letter-spacing:.5px;}
-.state-sub{font-size:11px; color:var(--dim);}
-.progress{height:5px; background:#1b2430; border-radius:3px; overflow:hidden; margin-top:6px;}
-.progress > i{display:block; height:100%; width:0; background:linear-gradient(90deg,#2ea043,#3fb950); transition:width .12s linear;}
-.perf-line{font-size:11px; color:var(--dim); margin-top:7px; border-top:1px dashed #1c2634; padding-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-
-/* ---------- 曲线 ---------- */
-.charts{display:flex; flex-direction:column; gap:6px; flex:1 1 auto; min-height:0;}
-.chart{position:relative; background:#0c1117; border:1px solid #1a2330; border-radius:7px; padding:5px 8px 3px; flex:1 1 0; min-height:0; display:flex; flex-direction:column;}
-.chart-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;}
-.chart-title{font-size:11px; color:var(--muted); letter-spacing:.5px;}
-.chart-value{font-size:12px; font-weight:600; color:var(--text);}
-.chart canvas{display:block; width:100%; height:auto; flex:1 1 auto; min-height:30px;}
-.chart-legend{display:flex; gap:10px; font-size:10px; color:var(--dim); margin-top:1px;}
-.legend-item{display:inline-flex; align-items:center; gap:4px;}
-.legend-item i{width:8px; height:2px; background:currentColor; display:inline-block;}
-
-/* ---------- 底栏 ---------- */
-footer{
-  height:40px; display:flex; align-items:center; gap:8px; padding:0 14px;
-  border-top:1px solid var(--border); background:#0d1218; font-size:11px; color:var(--dim);
-  overflow:hidden; white-space:nowrap;
-}
-footer .sep{width:1px; height:14px; background:var(--border);}
-.reserved{display:inline-flex; gap:6px;}
-.reserved span{
-  padding:2px 7px; border:1px dashed #2a3646; border-radius:4px; color:#5b6673; font-size:10px;
-}
-
-@media (max-width:1500px){
-  .layout{grid-template-columns:minmax(0,1fr) 430px;}
-  .grid2{gap:5px 12px;}
-}
-@media (max-width:1200px){
-  .layout{grid-template-columns:minmax(0,1fr) 390px;}
-  footer .hide-sm{display:none;}
-}
+.record-btn:hover{background:rgba(63,185,80,.2);}
+.record-btn.danger{background:rgba(248,81,73,.12); border-color:rgba(248,81,73,.45); color:var(--red);}
+.record-btn.danger:hover{background:rgba(248,81,73,.2);}
+.record-btn:disabled{opacity:.55; cursor:not-allowed;}
+.charts-pane{overflow:hidden;}
+.charts-pane .charts{overflow-y:auto;}
 </style>
 </head>
 <body>
+<div class="app live">
 
-<header>
-  <div class="brand"><b>DART</b><span>视觉调试 · M1</span></div>
-  <span class="chip" id="linkChip"><i class="dot"></i><span id="linkText">等待视觉程序…</span></span>
-  <span class="chip info" id="sourceChip">数据来源：--</span>
-  <span class="chip" id="fpsChip">FPS --</span>
-  <span class="chip" id="procChip">识别耗时 -- ms</span>
-  <div class="spacer"></div>
-  <span class="chip" id="txChip">串口输出：--</span>
-  <span id="clock" class="mono">--:--:--</span>
-</header>
+  <!-- ==================== 顶部状态栏 ==================== -->
+  <header class="topbar">
+    <div class="brand"><b>DART</b><span>视觉调试台 · 实时监测</span></div>
+    <span class="chip" id="linkChip" title="Flask 与 C++ 视觉程序之间的 TCP 调试帧链路状态">
+      <i class="dot"></i><span id="linkText">等待视觉程序…</span>
+    </span>
+    <span class="chip" id="recordChip" title="本地录制状态（录制主体在 C++ 视觉程序侧）">录制：--</span>
+    <button class="record-btn" id="recordToggleBtn" type="button"
+            title="开始/停止本地录制（录制主体在 C++ 侧，Flask 仅转发控制）">开始录制</button>
+    <span class="chip" id="fpsChip">FPS --</span>
+    <span class="chip hide-md" id="procChip">识别耗时 -- ms</span>
+    <span class="chip" id="txChip" title="本帧实际通过 15 字节协议发送的串口指令">串口输出：--</span>
+    <div class="spacer"></div>
+    <span class="chip hide-md" id="sourceChip">数据来源：--</span>
+    <span id="clock" class="mono">--:--:--</span>
+  </header>
 
-<div class="layout">
-  <!-- 左侧：实时视觉画面 -->
-  <section class="stage">
-    <img id="videoImage" src="/video_feed" alt="实时视觉画面">
-    <div class="stage-overlay">
-      <div class="stage-top">
-        <span class="stage-badge live" id="liveBadge">● LIVE · 调试帧</span>
+  <!-- ==================== 主区 ==================== -->
+  <main class="main">
+    <!-- 左：实时视觉画面（页面主体） -->
+    <section class="video-card">
+      <div class="video-head">
+        <span class="video-title">实时视觉画面</span>
+        <span class="video-sub" id="videoSub">--</span>
+        <span class="spacer"></span>
+        <span class="stage-badge live" id="liveBadge">● 无实时数据</span>
         <span class="stage-badge" id="resolutionBadge">-- × --</span>
       </div>
-      <div class="stage-bottom">
-        <span class="stage-badge" id="frameInfoBadge">seq --</span>
-        <span class="stage-badge" id="imageAgeBadge">帧龄 --</span>
-      </div>
-    </div>
-    <div class="stage-placeholder" id="stagePlaceholder">
-      <b>等待视觉程序调试数据</b>
-      <small>
-        1. 启动 C++ 视觉程序（调试数据口 5010）<br>
-        2. 本页面（Flask）与视觉程序通过 TCP 调试帧解耦<br>
-        3. 无视觉程序连接时本页面不会影响主链路
-      </small>
-    </div>
-  </section>
-
-  <!-- 右侧：状态 + 曲线 -->
-  <aside class="side">
-    <!-- 识别状态 -->
-    <div class="card">
-      <div class="card-head"><span>识别状态</span><span class="tag" id="detectTag">--</span></div>
-      <div class="card-body">
-        <div class="state-line">
-          <span class="state-big" id="detectState">--</span>
-          <span class="state-sub" id="detectSub">等待数据</span>
-        </div>
-        <div class="grid2">
-          <div class="kv"><span class="k">追踪状态</span><span class="v" id="vTracking">--</span></div>
-          <div class="kv"><span class="k">锁定进度</span><span class="v" id="vLock">--</span></div>
-          <div class="kv"><span class="k">绿色像素</span><span class="v" id="vGreenPixels">--</span></div>
-          <div class="kv"><span class="k">候选轮廓</span><span class="v" id="vCandidates">--</span></div>
-          <div class="kv"><span class="k">丢失计数</span><span class="v" id="vLost">--</span></div>
-          <div class="kv"><span class="k">连续确认</span><span class="v" id="vRequired">--</span></div>
-        </div>
-        <div class="progress"><i id="lockBar"></i></div>
-        <div class="perf-line" id="vPerfLine">主循环 fps -- · 识别耗时 -- ms</div>
-      </div>
-    </div>
-
-    <!-- 目标中心坐标 -->
-    <div class="card">
-      <div class="card-head"><span>目标中心坐标</span><span class="tag">单位：像素</span></div>
-      <div class="card-body grid2">
-        <div class="kv"><span class="k">target_x</span><span class="v big blue" id="vTargetX">--</span></div>
-        <div class="kv"><span class="k">target_y</span><span class="v big cyan" id="vTargetY">--</span></div>
-        <div class="kv"><span class="k">offset_x</span><span class="v" id="vOffsetX">--</span></div>
-        <div class="kv"><span class="k">offset_y</span><span class="v" id="vOffsetY">--</span></div>
-        <div class="kv"><span class="k">画面中心</span><span class="v muted" id="vImageCenter">--</span></div>
-        <div class="kv"><span class="k">图像尺寸</span><span class="v muted" id="vImageSize">--</span></div>
-      </div>
-    </div>
-
-    <!-- 视觉输出状态 -->
-    <div class="card">
-      <div class="card-head"><span>视觉输出状态</span><span class="tag">原有 15 字节协议语义</span></div>
-      <div class="card-body">
-        <div class="grid2">
-          <div class="kv"><span class="k">turnFlag</span><span class="v" id="vTurn">--</span></div>
-          <div class="kv"><span class="k">distanceFlag</span><span class="v" id="vDistance">--</span></div>
-          <div class="kv"><span class="k">clearFlag</span><span class="v" id="vClear">--</span></div>
-          <div class="kv"><span class="k">本帧串口发送</span><span class="v" id="vTxSent">--</span></div>
-        </div>
-        <div class="grid2" style="margin-top:6px; color:var(--dim); font-size:11px;">
-          <div class="kv"><span class="k">实际发送 T</span><span class="v muted" id="vTxTurn">--</span></div>
-          <div class="kv"><span class="k">实际发送 D</span><span class="v muted" id="vTxDist">--</span></div>
+      <div class="video-wrap" id="videoWrap">
+        <img id="videoImage" src="/video_feed" alt="实时视觉画面">
+        <div class="placeholder" id="videoPlaceholder">
+          <b>等待视觉程序调试数据</b>
+          <small>
+            1. 启动 C++ 视觉程序（调试数据口 5010）<br>
+            2. 本页面与视觉程序通过 TCP 调试帧解耦<br>
+            3. 无视觉程序连接时本页面不会影响主链路
+          </small>
         </div>
       </div>
-    </div>
+      <div class="video-foot">
+        <span class="mono" id="footSeq">seq --</span>
+        <span id="footTarget" class="hide-sm">TARGET --</span>
+        <span class="spacer"></span>
+        <span id="footAge">帧龄 --</span>
+        <span id="footProto" class="hide-sm">协议 v1 · TCP 调试帧</span>
+      </div>
+    </section>
 
-    <!-- 实时曲线 -->
-    <div class="card charts-card">
-      <div class="card-head"><span>实时曲线</span><span class="tag">窗口 30 s · SSE</span></div>
-      <div class="card-body charts">
-        <div class="chart">
-          <div class="chart-top"><span class="chart-title">处理帧率 fps</span><span class="chart-value" id="cFpsVal">--</span></div>
-          <canvas id="chartFps"></canvas>
+    <!-- 右：页签（状态面板 / 实时曲线） -->
+    <aside class="side">
+      <nav class="side-tabs" role="tablist" aria-label="右侧面板切换">
+        <button class="side-tab active" id="tabBtnStatus" type="button"
+                role="tab" aria-selected="true" aria-controls="tabStatus">状态面板</button>
+        <button class="side-tab" id="tabBtnCharts" type="button"
+                role="tab" aria-selected="false" aria-controls="tabCharts">实时曲线</button>
+      </nav>
+      <div class="tab-panels">
+
+        <!-- 页签 A：状态面板 -->
+        <div class="tab-pane" id="tabStatus" role="tabpanel" aria-labelledby="tabBtnStatus">
+          <!-- 识别状态 -->
+          <section class="panel">
+            <div class="panel-head">
+              <h2>引导灯识别<span class="panel-sub">连续确认</span></h2>
+              <span class="tag" id="detectTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="state-line">
+                <span class="state-big" id="detectState">--</span>
+                <span class="state-sub" id="detectSub">等待数据</span>
+              </div>
+              <div class="kv-grid">
+                <div class="kv"><span class="k">Tracking</span><span class="v" id="vTracking">--</span></div>
+                <div class="kv"><span class="k">连续锁定</span><span class="v" id="vLock">--</span></div>
+                <div class="kv"><span class="k">丢失计数</span><span class="v" id="vLost">--</span></div>
+                <div class="kv"><span class="k">锁定进度</span><span class="v" id="vLockPct">--</span></div>
+                <div class="kv"><span class="k">绿色像素</span><span class="v" id="vGreenPixels">--</span></div>
+                <div class="kv"><span class="k">候选轮廓</span><span class="v" id="vCandidates">--</span></div>
+              </div>
+              <div class="progress"><i id="lockBar"></i></div>
+              <div class="note" id="perfNote">主循环 fps -- · 识别耗时 -- ms</div>
+            </div>
+          </section>
+
+          <!-- 目标与偏差 -->
+          <section class="panel">
+            <div class="panel-head">
+              <h2>目标与偏差<span class="panel-sub">图像坐标 / 像素</span></h2>
+              <span class="tag" id="measureTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">target_x</span><span class="v big blue" id="vTargetX">--</span></div>
+                <div class="kv"><span class="k">target_y</span><span class="v big cyan" id="vTargetY">--</span></div>
+                <div class="kv"><span class="k">offset_x</span><span class="v" id="vOffsetX">--</span></div>
+                <div class="kv"><span class="k">offset_y</span><span class="v" id="vOffsetY">--</span></div>
+                <div class="kv"><span class="k">图像中心</span><span class="v muted" id="vImageCenter">--</span></div>
+                <div class="kv"><span class="k">图像尺寸</span><span class="v muted" id="vImageSize">--</span></div>
+              </div>
+              <div class="note" id="measureNote">未检测到目标时不显示无效坐标</div>
+            </div>
+          </section>
+
+          <!-- 视觉输出 / 串口 -->
+          <section class="panel">
+            <div class="panel-head">
+              <h2>视觉输出<span class="panel-sub">原有 15 字节串口协议语义</span></h2>
+              <span class="tag" id="txTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">turnFlag</span><span class="v" id="vTurn">--</span></div>
+                <div class="kv"><span class="k">distanceFlag</span><span class="v" id="vDistance">--</span></div>
+                <div class="kv"><span class="k">clearFlag</span><span class="v" id="vClear">--</span></div>
+                <div class="kv"><span class="k">本帧串口发送</span><span class="v" id="vTxSent">--</span></div>
+              </div>
+              <div class="note" id="txNote">实际发送 T -- · D -- · C --</div>
+            </div>
+          </section>
+
+          <!-- 调试链路 -->
+          <section class="panel">
+            <div class="panel-head">
+              <h2>调试链路<span class="panel-sub">TCP 调试帧</span></h2>
+              <span class="tag" id="linkTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">接收帧率</span><span class="v" id="vRecvFps">--</span></div>
+                <div class="kv"><span class="k">帧龄</span><span class="v" id="vRecvAge">--</span></div>
+                <div class="kv"><span class="k">累计接收</span><span class="v" id="vRecvTotal">--</span></div>
+                <div class="kv"><span class="k">数据来源</span><span class="v small" id="vLinkSource">--</span></div>
+              </div>
+              <div class="note">TCP 调试帧解耦：Flask/浏览器异常不影响视觉与串口主链路</div>
+            </div>
+          </section>
         </div>
-        <div class="chart">
-          <div class="chart-top"><span class="chart-title">识别耗时 ms</span><span class="chart-value" id="cProcVal">--</span></div>
-          <canvas id="chartProc"></canvas>
-        </div>
-        <div class="chart">
-          <div class="chart-top"><span class="chart-title">目标 X 坐标 px</span><span class="chart-value" id="cTargetXVal">--</span></div>
-          <canvas id="chartTargetX"></canvas>
-          <div class="chart-legend">
-            <span class="legend-item" style="color:var(--blue)"><i></i>target_x</span>
-            <span class="legend-item" style="color:var(--dim)"><i></i>画面中心</span>
+
+        <!-- 页签 B：实时曲线（独占右侧空间） -->
+        <div class="tab-pane charts-pane" id="tabCharts" role="tabpanel" aria-labelledby="tabBtnCharts" hidden>
+          <div class="chart-controls">
+            <div class="group">
+              <span class="label">窗口</span>
+              <select id="windowSelect" class="mini" title="曲线显示时间窗口">
+                <option value="5">5 s</option>
+                <option value="10">10 s</option>
+                <option value="30" selected>30 s</option>
+                <option value="60">60 s</option>
+              </select>
+            </div>
+            <div class="group" style="margin-left:auto;">
+              <span class="meta" id="chartMeta">--</span>
+              <button class="btn small" id="pauseBtn" type="button" title="暂停/继续曲线刷新（数据仍继续接收）">Ⅱ 暂停</button>
+              <button class="btn small ghost" id="clearBtn" type="button" title="清空曲线缓存并重新开始">清空</button>
+            </div>
           </div>
+          <details class="series-bar" id="seriesBar">
+            <summary>选择曲线字段（默认 4 条，点击展开 / 勾选）</summary>
+            <div class="series-chips" id="seriesChips"></div>
+          </details>
+          <div class="charts" id="chartList"></div>
         </div>
-        <div class="chart">
-          <div class="chart-top"><span class="chart-title">水平偏差 offset_x px</span><span class="chart-value" id="cOffsetVal">--</span></div>
-          <canvas id="chartOffset"></canvas>
-        </div>
-        <div style="font-size:10px; color:var(--dim); text-align:center; padding-top:2px;">
-          电控遥测 / 参数管理 / 录制与回放：M2 预留位置
-        </div>
+
       </div>
-    </div>
-  </aside>
+    </aside>
+  </main>
+
+  <!-- ==================== 底部运行信息栏 ==================== -->
+  <footer class="bottombar">
+    <span class="bo-item"><span class="k">会话</span><span class="v mono" id="boSession">--</span></span>
+    <span class="sep"></span>
+    <span class="bo-item"><span class="k">录制</span><span class="v" id="boRecord">未录制</span></span>
+    <span class="bo-item" id="boDroppedWrap" hidden><span class="k">队列丢弃</span><span class="v warn" id="boDropped">0</span></span>
+    <span class="bo-item" id="boErrorWrap" hidden><span class="k">写入错误</span><span class="v err" id="boError">0</span></span>
+    <span class="sep"></span>
+    <span class="bo-item"><span class="k">调试链路</span><span class="v" id="boLink">--</span></span>
+    <span class="sep hide-sm"></span>
+    <span class="bo-item hide-sm"><span class="k">来源</span><span class="v" id="boSource">--</span></span>
+    <span class="sep hide-sm"></span>
+    <span class="bo-item hide-sm"><span class="v mono" id="boSeq">seq --</span></span>
+    <div class="spacer"></div>
+    <button class="btn small ghost" id="recDetailBtn" type="button" title="展开/收起录制详情">录制详情 ▴</button>
+  </footer>
 </div>
 
-<footer>
-  <span id="fSource">数据来源：--</span>
-  <span class="sep"></span>
-  <span id="fReceiver">调试链路：--</span>
-  <span class="sep hide-sm"></span>
-  <span id="fSeq" class="hide-sm">seq --</span>
-  <span class="sep hide-sm"></span>
-  <span id="fProto" class="hide-sm">协议 v1 · TCP 调试帧</span>
-  <div class="spacer"></div>
-  <span class="reserved">
-    <span>电控遥测 M2</span><span>参数管理 M2</span><span>录制/回放 M2</span>
-  </span>
-</footer>
+<!-- 录制详情（可折叠，关键错误已在上方底栏常显） -->
+<div class="rec-popover" id="recPopover" hidden>
+  <div class="pop-head">
+    <span>录制详情</span>
+    <button id="recPopoverClose" type="button" title="关闭">×</button>
+  </div>
+  <div class="row"><span class="k">状态</span><span class="v" id="popState">--</span></div>
+  <div class="row"><span class="k">会话目录</span><span class="v mono" id="popDir">--</span></div>
+  <div class="row"><span class="k">视频帧 / 索引行</span><span class="v" id="popVideo">--</span></div>
+  <div class="row"><span class="k">遥测行</span><span class="v" id="popTelemetry">--</span></div>
+  <div class="row"><span class="k">队列丢弃（视频 / 遥测）</span><span class="v" id="popDropped">--</span></div>
+  <div class="row"><span class="k">写入错误</span><span class="v" id="popErrors">--</span></div>
+  <div class="row"><span class="k">控制方式</span><span class="v">Flask 转发 → C++ 本机控制口 5011</span></div>
+  <div class="note wrap">录制主体在 C++ 视觉程序侧：即使浏览器/Flask 异常，录制链路也不受影响。</div>
+</div>
 
 <script>
 "use strict";
 
 // ---------------------------------------------------------------------------
-// 状态
-// ---------------------------------------------------------------------------
-const state = {
-  latest: null,           // 最新一帧 JSON
-  receiver: null,         // 接收链路状态
-  series: { fps: [], proc: [], targetX: [], offset: [] },
-  windowMs: 30000,
-  lastSeq: 0,
-};
-
-const MAX_POINTS = 4000;
-
-// ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const fmt = (v, digits = 1) => (v === null || v === undefined || Number.isNaN(v))
+const fmt = (v, digits = 1) => (v === null || v === undefined || Number.isNaN(Number(v)))
   ? "--" : Number(v).toFixed(digits);
 const fmtInt = (v) => (v === null || v === undefined) ? "--" : String(Math.round(Number(v)));
 
@@ -309,20 +246,15 @@ function setText(id, text, cls) {
 function setChip(id, text, cls) {
   const el = $(id);
   if (!el) return;
-  const dot = el.querySelector(".dot");
-  if (dot) {
-    // 保留 dot，更新文本 span
-    const span = el.querySelector("span") || el;
-    span.textContent = text;
-  } else {
-    el.textContent = text;
-  }
-  el.className = "chip" + (cls ? " " + cls : "");
+  const span = el.querySelector("span");
+  if (span) span.textContent = text; else el.textContent = text;
+  el.classList.remove("ok", "warn", "err", "info");
+  if (cls) el.classList.add(...cls.split(" ").filter(Boolean));
 }
 
 function turnText(v) {
   if (v === null || v === undefined) return { text: "--", cls: "muted" };
-  if (Math.abs(v - 0) < 1e-6) return { text: "0 · 对准/停止", cls: "ok" };
+  if (Math.abs(v) < 1e-6) return { text: "0 · 对准/停止", cls: "ok" };
   if (Math.abs(v - 1) < 1e-6) return { text: "1 · 左转", cls: "blue" };
   if (Math.abs(v - 2) < 1e-6) return { text: "2 · 右转", cls: "orange" };
   return { text: String(v), cls: "" };
@@ -336,20 +268,6 @@ function distText(v) {
   return { text: String(v), cls: "" };
 }
 
-function renderPerfLine() {
-  const f = state.latest;
-  const r = state.receiver;
-  const parts = [];
-  parts.push(`主循环 fps ${f ? fmt(f.fps, 1) : "--"}`);
-  parts.push(`识别耗时 ${f ? fmt(f.processing_time_ms, 1) : "--"} ms`);
-  if (r) parts.push(`接收 ${r.recv_fps || 0} fps`);
-  if (r && r.last_frame_age_ms !== null && r.last_frame_age_ms !== undefined) {
-    parts.push(`帧龄 ${Math.round(r.last_frame_age_ms)} ms`);
-  }
-  const el = $("vPerfLine");
-  if (el) el.textContent = parts.join(" · ");
-}
-
 function updateClock() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
@@ -358,106 +276,163 @@ function updateClock() {
 setInterval(updateClock, 1000); updateClock();
 
 // ---------------------------------------------------------------------------
-// 状态渲染
+// 状态
 // ---------------------------------------------------------------------------
-function renderFrame(f) {
-  state.latest = f;
-  if (typeof f.seq === "number") state.lastSeq = Math.max(state.lastSeq, f.seq);
+const state = {
+  latest: null,
+  receiver: null,
+  lastSeq: 0,
+  series: {},          // key -> [{t, v}]
+  windowMs: 30000,
+  paused: false,
+};
+const MAX_POINTS = 6000;
 
-  // 顶栏
-  $("fpsChip").textContent = `FPS ${fmt(f.fps, 1)}`;
-  $("procChip").textContent = `识别耗时 ${fmt(f.processing_time_ms, 1)} ms`;
-  $("sourceChip").textContent = `数据来源：${f.source_label || f.source || "--"}`;
+// ---------------------------------------------------------------------------
+// 右侧页签切换
+// ---------------------------------------------------------------------------
+let activeTab = "status";
+function switchTab(name) {
+  activeTab = name;
+  const isStatus = name === "status";
+  $("tabStatus").hidden = !isStatus;
+  $("tabCharts").hidden = isStatus;
+  $("tabBtnStatus").classList.toggle("active", isStatus);
+  $("tabBtnCharts").classList.toggle("active", !isStatus);
+  $("tabBtnStatus").setAttribute("aria-selected", isStatus ? "true" : "false");
+  $("tabBtnCharts").setAttribute("aria-selected", isStatus ? "false" : "true");
+  if (!isStatus) {
+    // 页签从隐藏切换为可见后，canvas 布局尺寸才有效，必须重绘一次
+    requestAnimationFrame(() => { ensureChartCards(); drawAll(); });
+  }
+}
+$("tabBtnStatus").addEventListener("click", () => switchTab("status"));
+$("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
 
-  // 视觉画面角标
-  $("resolutionBadge").textContent = `${f.image_width || "--"} × ${f.image_height || "--"}`;
-  $("frameInfoBadge").textContent = `seq ${f.seq}`;
-  $("liveBadge").textContent = `● LIVE · ${f.source || "debug"}`;
+// ---------------------------------------------------------------------------
+// 实时曲线：字段定义（每个字段独立纵轴，避免不同量纲混用）
+// ---------------------------------------------------------------------------
+const CHART_FIELDS = [
+  { key: "fps", label: "处理帧率", unit: "fps", color: "#3fb950",
+    get: (f) => f.fps },
+  { key: "proc", label: "识别耗时", unit: "ms", color: "#d29922", zero: true,
+    get: (f) => f.processing_time_ms },
+  { key: "target_x", label: "目标 X 坐标", unit: "px", color: "#58a6ff",
+    get: (f) => (f.detected ? f.target_x : null), ref: (f) => f.image_center_x },
+  { key: "target_y", label: "目标 Y 坐标", unit: "px", color: "#39d2c0",
+    get: (f) => (f.detected ? f.target_y : null), ref: (f) => f.image_center_y },
+  { key: "offset_x", label: "水平偏差 offset_x", unit: "px", color: "#bc8cff", zero: true,
+    get: (f) => (f.detected ? f.offset_x : null) },
+  { key: "offset_y", label: "垂直偏差 offset_y", unit: "px", color: "#ff8a4c", zero: true,
+    get: (f) => (f.detected ? f.offset_y : null) },
+  { key: "green_pixels", label: "绿色像素", unit: "px", color: "#3ddc97", zero: true,
+    get: (f) => f.green_pixels },
+  { key: "lock_frames", label: "连续锁定帧", unit: "帧", color: "#e879f9", zero: true,
+    get: (f) => f.lock_frames },
+];
+const FIELD_BY_KEY = Object.fromEntries(CHART_FIELDS.map((f) => [f.key, f]));
+const selected = new Set(["fps", "proc", "target_x", "offset_x"]);
 
-  // 识别状态
-  const detected = !!f.detected;
-  $("detectState").textContent = detected ? "检测到有效引导灯" : "未检测到有效引导灯";
-  $("detectState").style.color = detected ? "var(--green)" : "var(--red)";
-  $("detectTag").textContent = detected ? "detected = true" : "detected = false";
-  $("detectSub").textContent = `tracking=${f.tracking ? "true" : "false"} · mode=${f.mode || "-"}`;
+for (const field of CHART_FIELDS) state.series[field.key] = [];
 
-  setText("vTracking", f.tracking ? "追踪中" : "未锁定", f.tracking ? "ok" : "muted");
-  const lockCur = detected ? f.lock_frames : (f.lock_frames || 0);
-  setText("vLock", `${fmtInt(f.lock_frames)} / ${fmtInt(f.required_frames)}`, "cyan");
-  setText("vGreenPixels", fmtInt(f.green_pixels), "muted");
-  setText("vCandidates", fmtInt(f.candidate_count), "muted");
-  setText("vLost", `${fmtInt(f.lost_frames)} / ${fmtInt(f.required_lost_frames)}`, "muted");
-  setText("vRequired", fmtInt(f.required_frames), "muted");
-  const lockPct = (f.required_frames > 0)
-    ? Math.max(0, Math.min(1, (f.lock_frames || 0) / f.required_frames)) * 100 : 0;
-  $("lockBar").style.width = lockPct.toFixed(1) + "%";
+let chartKeyOrder = "";
+const chartCards = new Map();
 
-  // 目标坐标
-  // 未检测时算法输出的 center 是 (0,0) 占位值，不代表真实坐标，界面显示 "--"
-  setText("vTargetX", detected ? fmt(f.target_x, 1) : "--", "big blue");
-  setText("vTargetY", detected ? fmt(f.target_y, 1) : "--", "big cyan");
-  setText("vOffsetX", detected ? fmt(f.offset_x, 1) : "--", detected ? "" : "muted");
-  setText("vOffsetY", detected ? fmt(f.offset_y, 1) : "--", detected ? "" : "muted");
-  setText("vImageCenter", `${fmt(f.image_center_x, 0)}, ${fmt(f.image_center_y, 0)}`, "muted");
-  setText("vImageSize", `${f.image_width || "--"} × ${f.image_height || "--"}`, "muted");
-
-  // 视觉输出
-  const t = turnText(f.turn_flag);
-  setText("vTurn", t.text, t.cls);
-  const d = distText(f.distance_flag);
-  setText("vDistance", d.text, d.cls);
-  setText("vClear", f.clear_flag === null || f.clear_flag === undefined
-    ? "未发送(null)" : fmt(f.clear_flag, 1),
-    f.clear_flag === null || f.clear_flag === undefined ? "muted" : "");
-  setText("vTxSent", f.tx && f.tx.sent ? "是" : "否", f.tx && f.tx.sent ? "ok" : "muted");
-  setText("vTxTurn", f.tx && f.tx.sent ? fmt(f.tx.turn_flag, 1) : "--", "muted");
-  setText("vTxDist", f.tx && f.tx.sent ? fmt(f.tx.distance_flag, 1) : "--", "muted");
-  $("txChip").textContent = (f.tx && f.tx.sent)
-    ? `串口输出：T=${fmt(f.tx.turn_flag, 1)} D=${fmt(f.tx.distance_flag, 1)} C=${fmt(f.tx.clear_flag, 1)}`
-    : "串口输出：本帧未发送";
-  $("txChip").className = "chip" + (f.tx && f.tx.sent ? " info" : "");
-
-  // 性能汇总（fps / 识别耗时 / 接收帧率 / 帧龄）
-  renderPerfLine();
-
-  // 数据来源与底栏
-  $("fSource").textContent = `数据来源：${f.source_label || f.source || "--"}（${f.source || "--"}）`;
-  $("fSeq").textContent = `seq ${f.seq}`;
+function ensureChartCards() {
+  const keys = CHART_FIELDS.filter((f) => selected.has(f.key)).map((f) => f.key);
+  if (keys.join(",") === chartKeyOrder) return;
+  chartKeyOrder = keys.join(",");
+  chartCards.clear();
+  const host = $("chartList");
+  host.innerHTML = "";
+  if (!keys.length) {
+    chartKeyOrder = "";
+    const empty = document.createElement("div");
+    empty.className = "charts-empty";
+    empty.textContent = "未选择曲线字段（点击上方「字段」勾选）";
+    host.appendChild(empty);
+    return;
+  }
+  for (const key of keys) {
+    const field = FIELD_BY_KEY[key];
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    const top = document.createElement("div");
+    top.className = "chart-top";
+    const title = document.createElement("span");
+    title.className = "chart-title";
+    title.textContent = field.label;
+    if (field.unit) {
+      const unit = document.createElement("span");
+      unit.className = "unit";
+      unit.textContent = field.unit;
+      title.appendChild(unit);
+    }
+    const value = document.createElement("span");
+    value.className = "chart-value";
+    value.style.color = field.color;
+    value.textContent = "--";
+    top.appendChild(title);
+    top.appendChild(value);
+    const canvas = document.createElement("canvas");
+    card.appendChild(top);
+    card.appendChild(canvas);
+    host.appendChild(card);
+    chartCards.set(key, { card, canvas, value });
+  }
 }
 
-// ---------------------------------------------------------------------------
-// 曲线
-// ---------------------------------------------------------------------------
-const charts = {
-  fps:     { canvas: $("chartFps"),     color: "#3fb950", value: $("cFpsVal"),     fixed: [0, 60] },
-  proc:    { canvas: $("chartProc"),    color: "#d29922", value: $("cProcVal"),    fixed: [0, 50] },
-  targetX: { canvas: $("chartTargetX"), color: "#58a6ff", value: $("cTargetXVal"), fixed: null, ref: (f) => f.image_center_x },
-  offset:  { canvas: $("chartOffset"),  color: "#bc8cff", value: $("cOffsetVal"),  fixed: null, zero: true },
-};
+function renderSeriesPicker() {
+  const box = $("seriesChips");
+  box.innerHTML = "";
+  for (const field of CHART_FIELDS) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selected.has(field.key);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selected.add(field.key);
+      else selected.delete(field.key);
+      ensureChartCards();
+      drawAll();
+    });
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(field.label + (field.unit ? ` (${field.unit})` : "")));
+    box.appendChild(label);
+  }
+}
 
-function pushSeries(name, t, v) {
-  if (v === null || v === undefined || Number.isNaN(v)) return;
-  const arr = state.series[name];
+function pushSample(key, t, v) {
+  const arr = state.series[key];
   arr.push({ t, v: Number(v) });
   if (arr.length > MAX_POINTS) arr.splice(0, arr.length - MAX_POINTS);
 }
 
 function appendSample(f) {
   const t = Number(f.timestamp_ms) || Date.now();
-  pushSeries("fps", t, f.fps);
-  pushSeries("proc", t, f.processing_time_ms);
-  pushSeries("targetX", t, f.detected ? f.target_x : null);
-  pushSeries("offset", t, f.detected ? f.offset_x : null);
+  for (const field of CHART_FIELDS) {
+    const v = field.get(f);
+    if (v === null || v === undefined || Number.isNaN(Number(v))) continue;
+    pushSample(field.key, t, v);
+  }
 }
 
-function drawChart(name) {
-  const cfg = charts[name];
-  const canvas = cfg.canvas;
-  if (!canvas) return;
+function chartValueText(v) {
+  const abs = Math.abs(v);
+  return abs >= 1000 ? v.toFixed(0) : (abs >= 100 ? v.toFixed(1) : v.toFixed(2));
+}
+
+function drawChart(key) {
+  const ui = chartCards.get(key);
+  if (!ui) return;
+  const field = FIELD_BY_KEY[key];
+  const canvas = ui.canvas;
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  const w = Math.max(10, Math.floor(rect.width));
-  const h = Math.max(10, Math.floor(rect.height));
+  const w = Math.floor(rect.width);
+  const h = Math.floor(rect.height);
+  // 页签隐藏时尺寸为 0：跳过绘制，切回页签后会重绘
+  if (w < 20 || h < 20) return;
   if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(h * dpr);
@@ -469,8 +444,7 @@ function drawChart(name) {
   const padL = 6, padR = 6, padT = 6, padB = 4;
   const plotW = w - padL - padR, plotH = h - padT - padB;
   const now = Date.now();
-  const t0 = now - state.windowMs;
-  const t1 = now;
+  const t0 = now - state.windowMs, t1 = now;
 
   // 网格
   ctx.strokeStyle = "rgba(255,255,255,0.05)";
@@ -480,76 +454,70 @@ function drawChart(name) {
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
   }
 
-  const data = state.series[name].filter((p) => p.t >= t0);
+  const data = state.series[key].filter((p) => p.t >= t0);
 
-  // 数值范围
   let vmin, vmax;
-  if (cfg.fixed) {
-    [vmin, vmax] = cfg.fixed;
+  if (field.fixed) {
+    [vmin, vmax] = field.fixed;
   } else {
     const vals = data.map((p) => p.v);
-    if (name === "targetX" && state.latest && state.latest.image_center_x) {
-      vals.push(state.latest.image_center_x);
+    if (field.ref && state.latest) {
+      const refV = field.ref(state.latest);
+      if (typeof refV === "number" && isFinite(refV)) vals.push(refV);
     }
     if (vals.length) {
       vmin = Math.min(...vals); vmax = Math.max(...vals);
       const span = vmax - vmin;
-      const pad = span > 1 ? span * 0.15 : Math.max(5, Math.abs(vmax) * 0.05 + 1);
+      const pad = span > 1 ? span * 0.15 : Math.max(1, Math.abs(vmax) * 0.05 + 1);
       vmin -= pad; vmax += pad;
     } else {
       vmin = 0; vmax = 1;
     }
-    if (cfg.zero && vmin > 0) vmin = 0;
-    if (cfg.zero && vmax < 0) vmax = 0;
+    if (field.zero && vmin > 0) vmin = 0;
+    if (field.zero && vmax < 0) vmax = 0;
   }
 
   const xOf = (t) => padL + plotW * Math.max(0, Math.min(1, (t - t0) / (t1 - t0)));
   const yOf = (v) => padT + plotH * (1 - Math.max(0, Math.min(1, (v - vmin) / (vmax - vmin || 1))));
 
-  // 参考线
-  if (cfg.ref && state.latest) {
-    const refV = cfg.ref(state.latest);
-    if (typeof refV === "number" && isFinite(refV)) {
-      const y = yOf(refV);
-      ctx.strokeStyle = "rgba(139,148,158,0.45)";
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-  if (cfg.zero) {
-    const y = yOf(0);
+  // 参考线 / 零线
+  const dashed = (value) => {
     ctx.strokeStyle = "rgba(139,148,158,0.45)";
     ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padL, yOf(value)); ctx.lineTo(w - padR, yOf(value)); ctx.stroke();
     ctx.setLineDash([]);
+  };
+  if (field.ref && state.latest) {
+    const refV = field.ref(state.latest);
+    if (typeof refV === "number" && isFinite(refV)) dashed(refV);
   }
+  if (field.zero) dashed(0);
 
-  // 折线（支持缺口）
+  // 折线（数据缺口断开）
   if (data.length >= 1) {
-    ctx.strokeStyle = cfg.color;
+    ctx.strokeStyle = field.color;
     ctx.lineWidth = 1.6;
     ctx.lineJoin = "round";
     ctx.beginPath();
     let started = false, prevT = null;
     for (const p of data) {
-      if (prevT !== null && p.t - prevT > 1500) { started = false; } // 断点
+      if (prevT !== null && p.t - prevT > 1500) started = false;
       const x = xOf(p.t), y = yOf(p.v);
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
       prevT = p.t;
     }
     ctx.stroke();
-
-    // 最新点
     const last = data[data.length - 1];
-    ctx.fillStyle = cfg.color;
+    ctx.fillStyle = field.color;
     ctx.beginPath();
     ctx.arc(xOf(last.t), yOf(last.v), 2.4, 0, Math.PI * 2);
     ctx.fill();
-    cfg.value.textContent = fmt(last.v, name === "offset" ? 1 : 1);
+    ui.value.textContent = chartValueText(last.v);
+  } else {
+    ui.value.textContent = "--";
   }
 
-  // y 轴上下限
+  // 独立纵轴上下限
   ctx.fillStyle = "rgba(139,148,158,0.8)";
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "right"; ctx.textBaseline = "top";
@@ -559,17 +527,152 @@ function drawChart(name) {
 }
 
 function drawAll() {
-  for (const name of Object.keys(charts)) drawChart(name);
-  if (state.latest) {
-    $("cFpsVal").textContent = fmt(state.latest.fps, 1);
-    $("cProcVal").textContent = fmt(state.latest.processing_time_ms, 1);
-    if (state.latest.detected) {
-      $("cTargetXVal").textContent = fmt(state.latest.target_x, 1);
-      $("cOffsetVal").textContent = fmt(state.latest.offset_x, 1);
-    }
-  }
+  if (state.paused) return;
+  ensureChartCards();
+  for (const key of chartCards.keys()) drawChart(key);
+  const meta = $("chartMeta");
+  if (meta) meta.textContent = `${Math.round(state.windowMs / 1000)} s 窗口`;
 }
+
+$("windowSelect").addEventListener("change", () => {
+  state.windowMs = (Number($("windowSelect").value) || 30) * 1000;
+  drawAll();
+});
+$("pauseBtn").addEventListener("click", () => {
+  state.paused = !state.paused;
+  const btn = $("pauseBtn");
+  btn.textContent = state.paused ? "▶ 继续" : "Ⅱ 暂停";
+  btn.classList.toggle("active", state.paused);
+  if (!state.paused) drawAll();
+});
+$("clearBtn").addEventListener("click", () => {
+  for (const key of Object.keys(state.series)) state.series[key].length = 0;
+  drawAll();
+});
 setInterval(drawAll, 100);
+
+// ---------------------------------------------------------------------------
+// 状态面板渲染
+// ---------------------------------------------------------------------------
+function renderPerfNote() {
+  const f = state.latest, r = state.receiver;
+  const parts = [];
+  parts.push(`主循环 fps ${f ? fmt(f.fps, 1) : "--"}`);
+  parts.push(`识别耗时 ${f ? fmt(f.processing_time_ms, 1) : "--"} ms`);
+  if (r) parts.push(`接收 ${r.recv_fps || 0} fps`);
+  $("perfNote").textContent = parts.join(" · ");
+}
+
+function renderFrame(f) {
+  state.latest = f;
+  if (typeof f.seq === "number") state.lastSeq = Math.max(state.lastSeq, f.seq);
+
+  // 顶栏 / 视频区
+  $("fpsChip").textContent = `FPS ${fmt(f.fps, 1)}`;
+  $("procChip").textContent = `识别耗时 ${fmt(f.processing_time_ms, 1)} ms`;
+  $("sourceChip").textContent = `数据来源：${f.source_label || f.source || "--"}`;
+  $("videoSub").textContent = f.source_label || f.source || "--";
+  $("resolutionBadge").textContent = `${f.image_width || "--"} × ${f.image_height || "--"}`;
+  $("liveBadge").textContent = `● LIVE · ${f.source || "debug"}`;
+  $("footSeq").textContent = `seq ${f.seq}`;
+  $("footTarget").textContent = `TARGET ${f.detected ? "ON" : "OFF"}`;
+  $("boSeq").textContent = `seq ${f.seq}`;
+  $("boSource").textContent = f.source_label || f.source || "--";
+  $("vLinkSource").textContent = f.source_label || f.source || "--";
+
+  // 识别状态
+  const detected = !!f.detected;
+  $("detectState").textContent = detected ? "检测到有效引导灯" : "未检测到有效引导灯";
+  $("detectState").style.color = detected ? "var(--green)" : "var(--red)";
+  $("detectTag").textContent = `detected = ${detected}`;
+  $("detectTag").className = "tag " + (detected ? "ok" : "warn");
+  $("detectSub").textContent = `tracking=${f.tracking ? "true" : "false"} · mode=${f.mode || "-"}`;
+  setText("vTracking", f.tracking ? "追踪中" : "未锁定", f.tracking ? "ok" : "muted");
+  setText("vLock", `${fmtInt(f.lock_frames)} / ${fmtInt(f.required_frames)}`, "cyan");
+  setText("vLost", `${fmtInt(f.lost_frames)} / ${fmtInt(f.required_lost_frames)}`, "muted");
+  const lockPct = (f.required_frames > 0)
+    ? Math.max(0, Math.min(1, (f.lock_frames || 0) / f.required_frames)) * 100 : 0;
+  setText("vLockPct", `${lockPct.toFixed(0)} %`, "muted");
+  $("lockBar").style.width = lockPct.toFixed(1) + "%";
+  setText("vGreenPixels", fmtInt(f.green_pixels), "muted");
+  setText("vCandidates", fmtInt(f.candidate_count), "muted");
+
+  // 目标与偏差：未检测时算法输出 (0,0) 是占位值，不能当作有效测量显示
+  setText("vTargetX", detected ? fmt(f.target_x, 1) : "--", detected ? "big blue" : "big muted");
+  setText("vTargetY", detected ? fmt(f.target_y, 1) : "--", detected ? "big cyan" : "big muted");
+  setText("vOffsetX", detected ? fmt(f.offset_x, 1) : "--", detected ? "" : "muted");
+  setText("vOffsetY", detected ? fmt(f.offset_y, 1) : "--", detected ? "" : "muted");
+  setText("vImageCenter", `${fmt(f.image_center_x, 0)}, ${fmt(f.image_center_y, 0)}`, "muted");
+  setText("vImageSize", `${f.image_width || "--"} × ${f.image_height || "--"}`, "muted");
+  const measureTag = $("measureTag");
+  measureTag.textContent = detected ? "有效测量" : "无有效目标";
+  measureTag.className = "tag " + (detected ? "ok" : "warn");
+  const measureNote = $("measureNote");
+  if (detected) {
+    measureNote.className = "note";
+    measureNote.textContent =
+      `偏差相对画面中心 (${fmt(f.image_center_x, 0)}, ${fmt(f.image_center_y, 0)}) · 单位 px`;
+  } else {
+    measureNote.className = "note warn";
+    measureNote.textContent = "未检测到目标：算法输出的 (0,0) 为占位值，不作为测量结果显示";
+  }
+
+  // 视觉输出 / 串口
+  const t = turnText(f.turn_flag);
+  setText("vTurn", t.text, t.cls);
+  const d = distText(f.distance_flag);
+  setText("vDistance", d.text, d.cls);
+  const clearMissing = f.clear_flag === null || f.clear_flag === undefined;
+  setText("vClear", clearMissing ? "未发送(null)" : fmt(f.clear_flag, 1), clearMissing ? "muted" : "");
+  const sent = !!(f.tx && f.tx.sent);
+  setText("vTxSent", sent ? "是" : "否", sent ? "ok" : "muted");
+  $("txTag").textContent = sent ? "已发送" : "未发送";
+  $("txTag").className = "tag " + (sent ? "ok" : "");
+  $("txNote").textContent = sent
+    ? `实际发送 T=${fmt(f.tx.turn_flag, 1)} · D=${fmt(f.tx.distance_flag, 1)} · C=${fmt(f.tx.clear_flag, 1)}`
+    : "本帧未发送串口指令";
+  $("txChip").textContent = sent
+    ? `串口输出：T=${fmt(f.tx.turn_flag, 0)} D=${fmt(f.tx.distance_flag, 0)} C=${fmt(f.tx.clear_flag, 0)}`
+    : "串口输出：本帧未发送";
+  $("txChip").className = "chip" + (sent ? " info" : "");
+
+  renderPerfNote();
+}
+
+function updateReceiver(r) {
+  state.receiver = r;
+  const stale = !!r.stale;
+  const connected = !!r.connected;
+  if (!r.listening) {
+    setChip("linkChip", "数据口监听失败", "err");
+  } else if (connected && !stale) {
+    setChip("linkChip", "视觉程序已连接", "ok");
+  } else if (connected && stale) {
+    setChip("linkChip", "已连接但数据过期", "warn");
+  } else {
+    setChip("linkChip", "等待视觉程序…", "warn");
+  }
+
+  const ageText = (r.last_frame_age_ms === null || r.last_frame_age_ms === undefined)
+    ? "--" : `${Math.round(r.last_frame_age_ms)} ms`;
+  $("footAge").textContent = `帧龄 ${ageText}`;
+  $("vRecvFps").textContent = `${r.recv_fps || 0} fps`;
+  $("vRecvAge").textContent = ageText;
+  $("vRecvTotal").textContent = `${r.total_frames || 0} 帧`;
+  const linkState = !r.listening ? "监听失败" : (connected ? (stale ? "数据过期" : "已连接") : "等待连接");
+  $("linkTag").textContent = linkState;
+  $("linkTag").className = "tag " + (!r.listening ? "err" : (connected ? (stale ? "warn" : "ok") : "warn"));
+  $("boLink").textContent = connected ? "已连接" : "等待连接";
+  $("boLink").className = "v " + (connected && !stale ? "ok" : (connected ? "warn" : "muted"));
+
+  const showPlaceholder = !connected || stale;
+  $("videoPlaceholder").hidden = !showPlaceholder;
+  $("liveBadge").classList.toggle("live", connected && !stale);
+  $("liveBadge").textContent = connected && !stale
+    ? `● LIVE · ${state.latest ? (state.latest.source || "debug") : "debug"}`
+    : "● 无实时数据";
+  renderPerfNote();
+}
 
 // ---------------------------------------------------------------------------
 // SSE 遥测流
@@ -587,7 +690,6 @@ function connectStream() {
     if (msg.receiver) updateReceiver(msg.receiver);
     if (Array.isArray(msg.samples)) {
       for (const s of msg.samples) {
-        // 兼容两种样本形态：{seq, payload} 与直接字段
         const f = s.payload || s;
         if (!f || !f.seq) continue;
         appendSample(f);
@@ -598,56 +700,139 @@ function connectStream() {
   };
   es.onerror = () => {
     setChip("linkChip", "后端连接中断，重连中…", "err");
-    // EventSource 会自动重连
   };
 }
 
-function updateReceiver(r) {
-  state.receiver = r;
-  const stale = r.stale;
-  const connected = r.connected;
-  if (!r.listening) {
-    setChip("linkChip", "数据口监听失败", "err");
-  } else if (connected && !stale) {
-    setChip("linkChip", "视觉程序已连接", "ok");
-  } else if (connected && stale) {
-    setChip("linkChip", "已连接但数据过期", "warn");
-  } else {
-    setChip("linkChip", "等待视觉程序…", "warn");
-  }
-
-  const ageText = (r.last_frame_age_ms === null || r.last_frame_age_ms === undefined)
-    ? "--" : `${Math.round(r.last_frame_age_ms)} ms`;
-  $("imageAgeBadge").textContent = `帧龄 ${ageText}`;
-  renderPerfLine();
-  $("fReceiver").textContent =
-    `调试链路：${connected ? "视觉程序已连接" : "等待连接"} · 接收 ${r.recv_fps || 0} fps · 累计 ${r.total_frames || 0} 帧 · seq ${r.last_seq || 0}`;
-
-  const showPlaceholder = !connected || stale;
-  $("stagePlaceholder").classList.toggle("hidden", !showPlaceholder);
-  $("liveBadge").classList.toggle("live", connected && !stale);
-  $("liveBadge").textContent = connected && !stale
-    ? `● LIVE · ${state.latest ? (state.latest.source || "debug") : "debug"}`
-    : "● 无实时数据";
-}
-
-// 无 SSE 时也要定期刷新"帧龄/过期"状态
+// 无 SSE 更新时粗算帧龄，避免状态一直停留在"已连接"
 setInterval(() => {
-  if (state.receiver) {
-    // 用本地时间粗算帧龄（SSE 心跳也会更新）
-    const r = state.receiver;
-    if (r.last_frame_age_ms !== null && r.last_frame_age_ms !== undefined) {
-      const delta = Date.now() - lastSseAt;
-      if (delta > 3000) {
-        r.stale = true;
-        updateReceiver(r);
-      }
-    }
+  if (state.receiver && lastSseAt && Date.now() - lastSseAt > 3000) {
+    state.receiver.stale = true;
+    updateReceiver(state.receiver);
   }
 }, 1000);
 
+// ---------------------------------------------------------------------------
+// 录制控制与统计（Flask 转发到 C++ 本机录制控制口；录制主体在 C++ 侧）
+// 顶栏常驻状态 + 按钮；底栏常驻关键统计与错误；详情折叠到浮层
+// ---------------------------------------------------------------------------
+const recState = { active: false, available: false, data: null, lastError: "" };
+
+function renderRecorder(data) {
+  recState.data = data;
+  const active = !!data.recording;
+  recState.active = active;
+  recState.available = true;
+
+  // 顶栏状态 chip（高频操作：状态常驻，详情在底栏/浮层）
+  setChip("recordChip", active ? "● 录制中" : "录制：未录制", active ? "ok" : "");
+  $("recordChip").title = active
+    ? `录制会话：${data.session || "--"}（视频 ${data.video_frames || 0} 帧 / 遥测 ${data.telemetry_rows || 0} 行）`
+    : "当前未录制";
+
+  // 开始/停止按钮（操作中禁用，避免重复点击）
+  const btn = $("recordToggleBtn");
+  if (btn && !btn.disabled) {
+    btn.textContent = active ? "停止录制" : "开始录制";
+    btn.className = "record-btn" + (active ? " danger" : "");
+    btn.title = active
+      ? "停止当前录制会话（文件会正常关闭并写入 session.json）"
+      : "开始一段新的录制会话（不覆盖旧会话）";
+  }
+
+  // 底栏：会话 + 关键统计 + 关键错误（错误/丢弃常显，不藏在折叠区）
+  const dropped = Number(data.video_dropped || 0) + Number(data.telemetry_dropped || 0);
+  const errors = Number(data.write_errors || 0);
+  $("boSession").textContent = data.session || (active ? "启动中…" : "--");
+  $("boRecord").textContent = active
+    ? `video ${data.video_frames || 0} 帧 · 遥测 ${data.telemetry_rows || 0} 行`
+    : "未录制";
+  $("boRecord").className = "v " + (active ? "ok" : "muted");
+  $("boDroppedWrap").hidden = dropped <= 0;
+  $("boDropped").textContent = String(dropped);
+  $("boErrorWrap").hidden = errors <= 0;
+  $("boError").textContent = String(errors);
+
+  // 详情浮层
+  $("popState").textContent = active ? "录制中" : "未录制";
+  $("popDir").textContent = data.session_dir || "--";
+  $("popVideo").textContent = `${data.video_frames || 0} 帧 / ${data.video_index_rows || 0} 行`;
+  $("popTelemetry").textContent = `${data.telemetry_rows || 0} 行`;
+  $("popDropped").textContent = `${data.video_dropped || 0} / ${data.telemetry_dropped || 0}`;
+  $("popErrors").textContent = String(errors);
+  if (data.last_error) {
+    $("popErrors").textContent = `${errors}（${data.last_error}）`;
+  }
+}
+
+async function refreshRecorder() {
+  const btn = $("recordToggleBtn");
+  try {
+    const resp = await fetch("/api/recorder", { cache: "no-store" });
+    const data = await resp.json();
+    if (data.ok === false) {
+      recState.available = false;
+      setChip("recordChip", "录制：不可用", "warn");
+      $("recordChip").title = "录制控制口未连接（C++ 侧未启用 web_debug.recording）";
+      if (btn && !btn.disabled) { btn.textContent = "录制不可用"; btn.disabled = true; }
+      $("boRecord").textContent = "控制口不可用";
+      $("boRecord").className = "v muted";
+      return;
+    }
+    if (btn && btn.textContent === "录制不可用") btn.disabled = false;
+    renderRecorder(data);
+  } catch (error) {
+    recState.available = false;
+    setChip("recordChip", "录制：不可用", "warn");
+    $("boRecord").textContent = "控制口不可用";
+  }
+}
+
+async function toggleRecording() {
+  const btn = $("recordToggleBtn");
+  if (!btn || btn.disabled) return;
+  const target = !recState.active;
+  btn.disabled = true;
+  btn.textContent = target ? "正在开始…" : "正在停止…";
+  try {
+    const resp = await fetch("/api/recorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: target ? "start" : "stop" }),
+    });
+    const data = await resp.json();
+    if (data.ok === false) {
+      setChip("recordChip", `录制操作失败：${data.error || "未知错误"}`, "err");
+    }
+  } catch (error) {
+    setChip("recordChip", "录制操作失败", "err");
+  } finally {
+    btn.disabled = false;
+    await refreshRecorder();
+  }
+}
+
+// 录制详情浮层开关
+function setPopover(open) {
+  $("recPopover").hidden = !open;
+  $("recDetailBtn").textContent = open ? "录制详情 ▾" : "录制详情 ▴";
+}
+$("recordToggleBtn").addEventListener("click", toggleRecording);
+$("recDetailBtn").addEventListener("click", () => setPopover($("recPopover").hidden));
+$("recPopoverClose").addEventListener("click", () => setPopover(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("recPopover").hidden) setPopover(false);
+});
+
+setInterval(refreshRecorder, 2000);
+
+// ---------------------------------------------------------------------------
+// 启动
+// ---------------------------------------------------------------------------
+renderSeriesPicker();
+ensureChartCards();
 connectStream();
 drawAll();
+refreshRecorder();
 </script>
 </body>
 </html>

@@ -112,8 +112,9 @@ DebugTelemetry::~DebugTelemetry()
 void DebugTelemetry::configure(const Options &options)
 {
     options_ = options;
-    if (options_.publish_fps < 1)
-        options_.publish_fps = 1;
+    // publish_fps: >0 = 主动限速；0 = 不主动限速（每个新帧都发布，跟随算法帧率）
+    if (options_.publish_fps < 0)
+        options_.publish_fps = 0;
     if (options_.publish_fps > 60)
         options_.publish_fps = 60;
     if (options_.jpeg_quality < 10)
@@ -137,8 +138,10 @@ bool DebugTelemetry::start()
     worker_ = std::thread(&DebugTelemetry::run, this);
 
     std::cout << "[WebDebug] 调试数据接口已启动: tcp://" << options_.host << ":" << options_.port
-              << " (" << options_.publish_fps << " fps, jpeg q=" << options_.jpeg_quality
-              << ", source=" << options_.source << ")" << std::endl;
+              << " (publish_fps="
+              << (options_.publish_fps > 0 ? std::to_string(options_.publish_fps) : std::string("0=不限速"))
+              << ", jpeg q=" << options_.jpeg_quality << ", source=" << options_.source << ")"
+              << std::endl;
     std::cout << "[WebDebug] 无 Flask 连接时自动丢弃调试帧，不影响视觉/串口主链路" << std::endl;
     return true;
 }
@@ -173,7 +176,8 @@ void DebugTelemetry::publish(const DebugFrame &frame)
 
 void DebugTelemetry::run()
 {
-    const auto interval = std::chrono::microseconds(1000000 / options_.publish_fps);
+    const auto interval = std::chrono::microseconds(
+        options_.publish_fps > 0 ? (1000000 / options_.publish_fps) : 0);
     last_stats_log_ = Clock::now();
 
     std::vector<uint8_t> jpeg;

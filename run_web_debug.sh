@@ -5,10 +5,14 @@
 # 用途：启动 Flask 调试后端 + C++ 视觉主程序（可选模拟视频源，无需工业相机）。
 #
 # 用法：
-#   ./run_web_debug.sh                        # 工业相机 + 真实串口（原有默认行为）
+#   ./run_web_debug.sh                        # 工业相机 + 真实串口 + 录制 + 实时预览
 #   ./run_web_debug.sh --source synthetic     # 无相机：合成绿色引导灯视频源
 #   ./run_web_debug.sh --source image:test/test.png --no-serial --no-gui
+#   ./run_web_debug.sh --no-record            # 关闭录制
 #   ./run_web_debug.sh --backend-only         # 只启动 Flask（视觉程序另行启动）
+#   ./run_web_debug.sh --replay               # 只启动 M2 离线回放（默认 recordings/）
+#   ./run_web_debug.sh --replay --session <会话目录>
+#   ./run_web_debug.sh --replay --session-root <会话根目录>
 #
 # 说明：
 #   - Flask 与视觉程序是两个独立进程，调试系统故障不会影响视觉/串口主链路；
@@ -26,7 +30,35 @@ WEB_HOST="${WEB_HOST:-127.0.0.1}"
 WEB_PORT="${WEB_PORT:-5000}"
 DATA_HOST="${DATA_HOST:-127.0.0.1}"
 DATA_PORT="${DATA_PORT:-5010}"
+REPLAY_PORT="${REPLAY_PORT:-5001}"
 BACKEND_ONLY=0
+REPLAY=0
+SESSION_DIR=""
+SESSION_ROOT=""
+
+usage() {
+    cat <<'EOF'
+用法: ./run_web_debug.sh [选项]
+
+  默认                真实使用（相机 + 串口 + 录制 + 实时预览）
+  --source <spec>     模拟视频源: synthetic | synthetic:none | image:<path> | video:<path>
+  --no-serial         不打开串口（模拟发送）
+  --no-gui            无头运行（不创建 OpenCV 窗口）
+  --no-record         关闭录制
+  --record-root <dir> 录制会话根目录
+  --no-web-debug      关闭实时预览
+  --backend-only      只启动 Flask 实时后端
+  --replay            只启动 M2 离线回放（默认 recordings/）
+  --session <dir>     --replay 时指定单个会话目录
+  --session-root <dir> --replay 时指定会话根目录
+  -h, --help          显示本帮助
+
+示例:
+  ./run_web_debug.sh                                          # 真实使用
+  ./run_web_debug.sh --source synthetic --no-serial --no-gui  # 无相机联调
+  ./run_web_debug.sh --replay                                 # 离线回放
+EOF
+}
 
 ARGS=()
 while [ "$#" -gt 0 ]; do
@@ -34,6 +66,22 @@ while [ "$#" -gt 0 ]; do
         --backend-only)
             BACKEND_ONLY=1
             shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --replay)
+            REPLAY=1
+            shift
+            ;;
+        --session)
+            SESSION_DIR="${2:-}"
+            shift 2 || shift
+            ;;
+        --session-root)
+            SESSION_ROOT="${2:-}"
+            shift 2 || shift
             ;;
         --source)
             spec="${2:-}"
@@ -60,6 +108,27 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+# ---- 0. M2 离线回放模式（独立服务，不启动视觉主程序/实时后端）----
+if [ "$REPLAY" -eq 1 ]; then
+    PLAYBACK_ARGS=()
+    to_abs() {
+        case "$1" in
+            /*) printf '%s' "$1" ;;
+            *) printf '%s' "$ROOT_DIR/$1" ;;
+        esac
+    }
+    if [ -n "$SESSION_DIR" ]; then
+        PLAYBACK_ARGS=(--dir "$(to_abs "$SESSION_DIR")")
+    elif [ -n "$SESSION_ROOT" ]; then
+        PLAYBACK_ARGS=(--root "$(to_abs "$SESSION_ROOT")")
+    else
+        PLAYBACK_ARGS=(--root "$ROOT_DIR/recordings")
+    fi
+    echo "[run_web_debug] 启动 M2 离线回放: http://$WEB_HOST:$REPLAY_PORT/ (会话: ${PLAYBACK_ARGS[*]})"
+    exec python3 "$ROOT_DIR/web_debug/playback.py" \
+        --host "$WEB_HOST" --port "$REPLAY_PORT" "${PLAYBACK_ARGS[@]}"
+fi
 
 # ---- 1. 启动 Flask 调试后端 ----
 echo "[run_web_debug] 启动调试后端: http://$WEB_HOST:$WEB_PORT/ (数据口 $DATA_HOST:$DATA_PORT)"

@@ -52,5 +52,15 @@ web_debug:
   enabled: true          # false=完全关闭调试数据发布
   host: "127.0.0.1"      # Flask 调试数据接收地址（仅本机）
   port: 5010             # Flask 调试数据接收端口
-  publish_fps: 20        # 调试帧发布频率（与视觉主循环解耦）
+  publish_fps: 0         # 预览发布频率：0=不主动限速（跟随算法帧率）；>0 为限速值
   jpeg_quality: 75       # 调试画面 JPEG 质量
+
+# M2 数据录制（不依赖 Flask/浏览器；Flask 未启动或浏览器未打开时照常录制）
+recording:
+  enabled: true          # 录制系统总开关（--no-record 可覆盖）
+  auto_start: true       # 程序启动即开始录制
+  root: "recordings"     # 会话根目录（相对项目根），每次录制生成独立子目录
+  video_scale: 1         # 视频缩放：1=调试画面原尺寸（原实现固定 3 倍放大，无信息增益且 IO 大）
+  video_fps: 30          # AVI 标称帧率（仅播放器默认速度；真实帧时间以 video_index_001.csv 为准）
+  queue_capacity: 64     # 视频帧有界队列（满则丢帧并计入 session.json）
+  control_port: 5011     # 本机录制控制口（仅 127.0.0.1；0=禁用），供网页 /api/recorder 转发

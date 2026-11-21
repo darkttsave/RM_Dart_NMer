@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DART 视觉调试台 · 历史回放</title>
+<!-- M2-UI：回放界面重构（顶栏会话选择 / 左侧视频 / 右侧多页签 / 底部播放控制与统一时间轴） -->
+<link rel="stylesheet" href="/static/dashboard.css?v=m2ui">
+<style>
+/* 回放页少量覆盖样式（通用样式见 /static/dashboard.css） */
+.transport-row{flex-wrap:wrap; row-gap:4px;}
+.video-wrap img{cursor:zoom-in;}
+.video-wrap img:fullscreen{width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; cursor:zoom-out;}
+.video-card:fullscreen{width:100vw; height:100vh; border:0; border-radius:0; background:#000;}
+.video-card:fullscreen .video-head,
+.video-card:fullscreen .video-foot{display:none;}
+.video-card:fullscreen .video-wrap{height:100%;}
+.video-card.faux-fullscreen{position:fixed; inset:0; z-index:9999; width:100vw; height:100vh; border:0; border-radius:0; background:#000;}
+.video-card.faux-fullscreen .video-head,
+.video-card.faux-fullscreen .video-foot{display:none;}
+.video-card.faux-fullscreen .video-wrap{height:100%;}
+.charts-grid .chart-card{min-height:96px;}
+.config-snapshot .kv-grid{margin-top:2px;}
+</style>
+</head>
+<body>
+<div class="app replay">
+
+  <!-- ==================== 顶部：回放模式 / 会话选择 / 数据来源 ==================== -->
+  <header class="topbar">
+    <div class="brand"><b>DART</b><span>视觉调试台 · 历史回放</span></div>
+    <span class="chip warn" id="replayModeChip"
+          title="历史回放只读取本地录制文件，不会向电控发送任何指令">回放模式：只读 · 不向电控发送指令</span>
+    <select id="sessionSelect" title="选择录制会话"></select>
+    <span class="chip" id="statusChip">会话状态：--</span>
+    <span class="chip info hide-md" id="sourceChip">数据来源：--</span>
+    <span class="chip hide-md" id="durationChip">时长 --</span>
+    <div class="spacer"></div>
+    <span class="chip" id="missingChip">视频缺失 --</span>
+    <a class="link" id="liveLink" href="{{ live_url }}" target="_blank" rel="noopener" {% if not live_url %}hidden{% endif %}>返回实时调试台</a>
+    <span id="clock" class="mono">--:--:--</span>
+  </header>
+
+  <!-- ==================== 主区 ==================== -->
+  <main class="main">
+    <!-- 左：历史视频画面 -->
+    <section class="video-card" id="videoPanel">
+      <div class="video-head">
+        <span class="video-title">历史视频画面</span>
+        <span class="video-sub" id="videoMeta">--</span>
+        <span class="spacer"></span>
+        <button class="btn small ghost" id="fsBtn" type="button"
+                title="全屏观看（双击画面也可切换，Esc 退出）">全屏</button>
+        <span class="stage-badge" id="frameBadge">video --</span>
+        <span class="stage-badge" id="sourceFrameBadge">帧 --</span>
+      </div>
+      <div class="video-wrap" id="videoWrap">
+        <img id="videoImage" alt="历史视频帧">
+        <div class="placeholder" id="stagePlaceholder">
+          <b>正在加载录制会话…</b>
+          <small>回放不连接工业相机与电控，不需要启动视觉主程序</small>
+        </div>
+      </div>
+      <div class="video-foot">
+        <span class="mono" id="timeBadge">-- / --</span>
+        <span class="spacer"></span>
+        <span id="missHint"></span>
+        <span class="hide-sm" id="videoSourceFoot">只读回放 · 不连接相机与电控</span>
+      </div>
+    </section>
+
+    <!-- 右：多页签（历史曲线 / 当前帧数据 / 会话信息） -->
+    <aside class="side">
+      <nav class="side-tabs" role="tablist" aria-label="右侧面板切换">
+        <button class="side-tab active" id="tabBtnCharts" type="button"
+                role="tab" aria-selected="true" aria-controls="tabCharts">历史曲线</button>
+        <button class="side-tab" id="tabBtnFrame" type="button"
+                role="tab" aria-selected="false" aria-controls="tabFrame">当前帧数据</button>
+        <button class="side-tab" id="tabBtnSession" type="button"
+                role="tab" aria-selected="false" aria-controls="tabSession">会话信息</button>
+      </nav>
+      <div class="tab-panels">
+
+        <!-- 页签 A：历史曲线 -->
+        <div class="tab-pane charts-pane" id="tabCharts" role="tabpanel" aria-labelledby="tabBtnCharts">
+          <div class="chart-controls">
+            <div class="group">
+              <span class="label">窗口</span>
+              <select id="windowSelect" class="mini" title="曲线显示窗口（以当前播放位置为右端）">
+                <option value="5">5 s</option>
+                <option value="10">10 s</option>
+                <option value="20" selected>20 s</option>
+                <option value="60">60 s</option>
+                <option value="0">全会话</option>
+              </select>
+            </div>
+            <div class="group" style="margin-left:auto;">
+              <span class="meta" id="telemetryMeta">--</span>
+              <span class="meta" id="playheadMeta" title="红色竖线为当前播放头">播放头 --</span>
+            </div>
+          </div>
+          <details class="series-bar" id="seriesBar">
+            <summary>选择曲线字段（默认 4 条，点击展开 / 勾选）</summary>
+            <div class="series-chips" id="seriesChips"></div>
+          </details>
+          <div class="charts-grid" id="chartsGrid">
+            <div class="charts-empty">加载会话后显示曲线</div>
+          </div>
+        </div>
+
+        <!-- 页签 B：当前帧数据 -->
+        <div class="tab-pane" id="tabFrame" role="tabpanel" aria-labelledby="tabBtnFrame" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>识别与目标<span class="panel-sub">当前回放帧</span></h2>
+            </div>
+            <div class="panel-body">
+              <div class="state-line">
+                <span class="state-big" id="detectState">--</span>
+                <span class="state-sub" id="detectSub">--</span>
+              </div>
+              <div class="kv-grid">
+                <div class="kv"><span class="k">原始处理帧号</span><span class="v mono" id="vFrameId">--</span></div>
+                <div class="kv"><span class="k">会话内时刻</span><span class="v mono" id="vElapsed">--</span></div>
+                <div class="kv"><span class="k">target_x</span><span class="v big blue" id="vTargetX">--</span></div>
+                <div class="kv"><span class="k">target_y</span><span class="v big cyan" id="vTargetY">--</span></div>
+                <div class="kv"><span class="k">offset_x</span><span class="v" id="vOffsetX">--</span></div>
+                <div class="kv"><span class="k">offset_y</span><span class="v" id="vOffsetY">--</span></div>
+                <div class="kv"><span class="k">锁定 / 丢失</span><span class="v muted" id="vLock">--</span></div>
+                <div class="kv"><span class="k">目标半径</span><span class="v muted" id="vRadius">--</span></div>
+              </div>
+              <div class="note" id="frameNote">未检测到目标时不显示无效坐标</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>转向输出与串口<span class="panel-sub">15 字节协议语义</span></h2>
+              <span class="tag" id="txTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">turnFlag</span><span class="v" id="vTurn">--</span></div>
+                <div class="kv"><span class="k">distanceFlag</span><span class="v" id="vDistance">--</span></div>
+                <div class="kv"><span class="k">clearFlag</span><span class="v" id="vClear">--</span></div>
+                <div class="kv"><span class="k">本帧是否发送</span><span class="v" id="vTxSent">--</span></div>
+              </div>
+              <div class="note" id="txNote">实际发送 T -- · D -- · C --</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>性能<span class="panel-sub">逐帧</span></h2>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">算法 FPS</span><span class="v ok" id="vFps">--</span></div>
+                <div class="kv"><span class="k">识别耗时</span><span class="v warn" id="vProc">--</span></div>
+                <div class="kv"><span class="k">绿色像素</span><span class="v muted" id="vGreen">--</span></div>
+                <div class="kv"><span class="k">候选轮廓</span><span class="v muted" id="vCandidates">--</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>时间与图像<span class="panel-sub">当前回放帧</span></h2>
+              <span class="tag" id="videoTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">视频帧索引</span><span class="v mono" id="vVideoIdx">--</span></div>
+                <div class="kv"><span class="k">视频源帧号</span><span class="v mono" id="vSourceFrame">--</span></div>
+                <div class="kv"><span class="k">绝对时间戳 (us)</span><span class="v small mono" id="vTimestamp">--</span></div>
+                <div class="kv"><span class="k">视频时间偏移</span><span class="v small mono" id="vVideoElapsed">--</span></div>
+                <div class="kv"><span class="k">图像尺寸</span><span class="v small muted" id="vImageSize">--</span></div>
+                <div class="kv"><span class="k">图像中心</span><span class="v small muted" id="vImageCenter">--</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 页签 C：会话信息 -->
+        <div class="tab-pane" id="tabSession" role="tabpanel" aria-labelledby="tabBtnSession" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>会话信息<span class="panel-sub">录制文件元数据</span></h2>
+              <span class="tag" id="completeTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid one" style="gap:3px;">
+                <div class="kv"><span class="k">会话名称</span><span class="v mono" id="iSession">--</span></div>
+                <div class="kv"><span class="k">开始时间</span><span class="v small mono" id="iStart">--</span></div>
+                <div class="kv"><span class="k">结束时间</span><span class="v small mono" id="iEnd">--</span></div>
+                <div class="kv"><span class="k">持续时长</span><span class="v mono" id="iDuration">--</span></div>
+                <div class="kv"><span class="k">数据来源</span><span class="v small" id="iSource">--</span></div>
+                <div class="kv"><span class="k">图像尺寸</span><span class="v small" id="iImageSize">--</span></div>
+                <div class="kv"><span class="k">应用版本</span><span class="v small" id="iVersion">--</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>录制统计<span class="panel-sub">帧与丢帧</span></h2>
+              <span class="tag" id="missingTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">处理帧数</span><span class="v muted" id="iFrames">--</span></div>
+                <div class="kv"><span class="k">遥测行数</span><span class="v muted" id="iTelemetry">--</span></div>
+                <div class="kv"><span class="k">视频帧数</span><span class="v muted" id="iVideo">--</span></div>
+                <div class="kv"><span class="k">视频丢帧</span><span class="v muted" id="iVideoDropped">--</span></div>
+                <div class="kv"><span class="k">遥测丢帧</span><span class="v muted" id="iTelemetryDropped">--</span></div>
+                <div class="kv"><span class="k">缺失视频帧</span><span class="v muted" id="iMissing">--</span></div>
+                <div class="kv"><span class="k">视频编码</span><span class="v small muted" id="iCodec">--</span></div>
+                <div class="kv"><span class="k">视频分辨率</span><span class="v small muted" id="iVideoSize">--</span></div>
+              </div>
+              <div class="note" id="iErrors">录制错误：无</div>
+            </div>
+          </section>
+
+          <section class="panel config-snapshot">
+            <div class="panel-head">
+              <h2>时间戳与配置快照<span class="panel-sub">录制时实际生效</span></h2>
+              <span class="tag" id="configTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid one" style="margin-bottom:5px;">
+                <div class="kv"><span class="k">时间关联</span><span class="v small" id="iAccuracy" title="">--</span></div>
+              </div>
+              <div class="note wrap" style="border-top:0; margin-top:0; padding-top:0;" id="iTimeBase">时间基准：--</div>
+              <div class="note wrap" id="iFrameTsSource">帧时间戳来源：--</div>
+              <div class="kv-grid config-snapshot" id="configParams"></div>
+              <div class="note wrap" id="configNote">--</div>
+            </div>
+          </section>
+        </div>
+
+      </div>
+    </aside>
+  </main>
+
+  <!-- ==================== 底部：播放控制 + 统一时间轴（始终可见） ==================== -->
+  <footer class="transport-bar">
+    <div class="transport-row">
+      <button class="btn primary" id="playBtn" type="button">▶ 播放</button>
+      <button class="btn" id="stepBackBtn" type="button" title="后退 1 秒">-1s</button>
+      <button class="btn" id="stepFwdBtn" type="button" title="前进 1 秒">+1s</button>
+      <button class="btn" id="prevBtn" type="button" title="上一帧（按实际帧时间索引）">◀ 帧</button>
+      <button class="btn" id="nextBtn" type="button" title="下一帧（按实际帧时间索引）">帧 ▶</button>
+      <span class="label">速度</span>
+      <select id="speedSelect" class="mini" title="播放速度（仅影响回放速度，不影响时间戳关联）">
+        <option value="0.25">0.25x</option>
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option>
+        <option value="2">2x</option>
+        <option value="4">4x</option>
+      </select>
+      <span class="label">按帧号</span>
+      <input id="frameIdInput" class="frame-input" type="number" min="1" placeholder="frame_id">
+      <button class="btn" id="locateBtn" type="button">定位</button>
+      <span id="locateResult" class="mono"></span>
+      <div class="spacer"></div>
+      <span class="mono" id="rangeText">帧号范围 --</span>
+      <span class="mono" id="sampleRateText"></span>
+      <span class="mono" id="frameText">帧 --</span>
+    </div>
+    <div class="transport-row">
+      <input type="range" id="timeline" class="timeline" min="0" max="1000" value="0" step="1"
+             title="拖动时间轴（按录制时间戳定位）">
+    </div>
+    <div class="time-row">
+      <span class="mono" id="timeText">00:00.000 / 00:00.000</span>
+      <span id="warningLine" style="color:var(--yellow);"></span>
+    </div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// 工具
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(Number(v)))
+  ? "--" : Number(v).toFixed(d);
+const fmtMs = (ms) => {
+  const total = Math.max(0, Number(ms) || 0);
+  const s = Math.floor(total / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  const milli = Math.floor(total % 1000);
+  return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
+};
+const setText = (id, text, cls) => {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  if (cls !== undefined) el.className = "v " + cls;
+};
+const setChip = (id, text, cls) => {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove("ok", "warn", "err", "info");
+  if (cls) el.classList.add(...cls.split(" ").filter(Boolean));
+};
+
+function turnText(v) {
+  if (v === null || v === undefined) return { text: "--", cls: "muted" };
+  if (Math.abs(v) < 1e-6) return { text: "0 · 对准/停止", cls: "ok" };
+  if (Math.abs(v - 1) < 1e-6) return { text: "1 · 左转", cls: "blue" };
+  if (Math.abs(v - 2) < 1e-6) return { text: "2 · 右转", cls: "orange" };
+  if (Math.abs(v - 3) < 1e-6) return { text: "3 · 无目标", cls: "muted" };
+  return { text: String(v), cls: "" };
+}
+function distText(v) {
+  if (v === null || v === undefined) return { text: "--", cls: "muted" };
+  if (Math.abs(v - 1) < 1e-6) return { text: "1 · 远(加速)", cls: "red" };
+  if (Math.abs(v - 2) < 1e-6) return { text: "2 · 中(减速)", cls: "warn" };
+  if (Math.abs(v - 3) < 1e-6) return { text: "3 · 对准/无目标", cls: "ok" };
+  return { text: String(v), cls: "" };
+}
+function lastIndexLE(arr, value) {
+  if (!arr.length) return -1;
+  if (value < arr[0]) return -1;
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (arr[mid] <= value) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+function updateClock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  $("clock").textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+setInterval(updateClock, 1000); updateClock();
+
+// ---------------------------------------------------------------------------
+// 状态
+// ---------------------------------------------------------------------------
+const state = {
+  dir: "",
+  summary: null,
+  telemetry: [],
+  videoIndex: [],
+  missingIds: [],
+  duration: 0,
+  t: 0,
+  playing: false,
+  lastTick: 0,
+  curVideoIndex: -1,
+  frameSeq: 0,
+  videoElapsed: [],
+  teleElapsed: [],
+  speed: 1,
+  windowS: 20,
+  selected: new Set(["target_x", "offset_x", "fps", "processing_time_ms"]),
+};
+
+// ---------------------------------------------------------------------------
+// 右侧页签切换
+// ---------------------------------------------------------------------------
+let activeTab = "charts";
+function switchTab(name) {
+  activeTab = name;
+  const panes = { charts: "tabCharts", frame: "tabFrame", session: "tabSession" };
+  const buttons = { charts: "tabBtnCharts", frame: "tabBtnFrame", session: "tabBtnSession" };
+  for (const key of Object.keys(panes)) {
+    const isActive = key === name;
+    $(panes[key]).hidden = !isActive;
+    $(buttons[key]).classList.toggle("active", isActive);
+    $(buttons[key]).setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+  if (name === "charts") {
+    // 从隐藏切回可见后 canvas 布局尺寸才有效，必须重绘一次
+    requestAnimationFrame(() => paintCharts(true));
+  }
+}
+$("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
+$("tabBtnFrame").addEventListener("click", () => switchTab("frame"));
+$("tabBtnSession").addEventListener("click", () => switchTab("session"));
+
+// ---------------------------------------------------------------------------
+// 曲线字段定义（参考 Misaka 回放的"可选字段"逻辑；字段均来自录制 CSV 的真实列）
+// ---------------------------------------------------------------------------
+const CHART_FIELDS = [
+  { key: "target_x", label: "目标 X 坐标", unit: "px", color: "#58a6ff", get: (r) => (r.detected ? r.target_x : null) },
+  { key: "target_y", label: "目标 Y 坐标", unit: "px", color: "#39d2c0", get: (r) => (r.detected ? r.target_y : null) },
+  { key: "offset_x", label: "水平偏差 offset_x", unit: "px", color: "#bc8cff", zero: true, get: (r) => (r.detected ? r.offset_x : null) },
+  { key: "offset_y", label: "垂直偏差 offset_y", unit: "px", color: "#ff8a4c", zero: true, get: (r) => (r.detected ? r.offset_y : null) },
+  { key: "turn_flag", label: "turnFlag", unit: "", color: "#ff6b6b", zero: true, get: (r) => r.turn_flag },
+  { key: "distance_flag", label: "distanceFlag", unit: "", color: "#e879f9", zero: true, get: (r) => r.distance_flag },
+  { key: "fps", label: "处理帧率", unit: "fps", color: "#3fb950", get: (r) => r.fps },
+  { key: "processing_time_ms", label: "识别耗时", unit: "ms", color: "#d29922", zero: true, get: (r) => r.processing_time_ms },
+];
+const FIELD_BY_KEY = Object.fromEntries(CHART_FIELDS.map((f) => [f.key, f]));
+
+let chartKeyOrder = "";
+const chartCards = new Map();
+
+function ensureCharts() {
+  const keys = CHART_FIELDS.filter((f) => state.selected.has(f.key)).map((f) => f.key);
+  if (keys.join(",") === chartKeyOrder) return;
+  chartKeyOrder = keys.join(",");
+  chartCards.clear();
+  const grid = $("chartsGrid");
+  grid.innerHTML = "";
+  if (!keys.length) {
+    chartKeyOrder = "";
+    grid.innerHTML = '<div class="charts-empty">未选择曲线字段（展开上方"选择曲线字段"勾选）</div>';
+    return;
+  }
+  for (const key of keys) {
+    const field = FIELD_BY_KEY[key];
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    const top = document.createElement("div");
+    top.className = "chart-top";
+    const title = document.createElement("span");
+    title.className = "chart-title";
+    title.textContent = field.label;
+    if (field.unit) {
+      const unit = document.createElement("span");
+      unit.className = "unit";
+      unit.textContent = field.unit;
+      title.appendChild(unit);
+    }
+    const value = document.createElement("span");
+    value.className = "chart-value";
+    value.style.color = field.color;
+    top.appendChild(title);
+    top.appendChild(value);
+    const canvas = document.createElement("canvas");
+    card.appendChild(top);
+    card.appendChild(canvas);
+    grid.appendChild(card);
+    chartCards.set(key, { canvas, value });
+  }
+}
+
+function renderSeriesPicker() {
+  const box = $("seriesChips");
+  box.innerHTML = "";
+  for (const field of CHART_FIELDS) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.selected.has(field.key);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.selected.add(field.key);
+      else state.selected.delete(field.key);
+      ensureCharts();
+      paintCharts(true);
+    });
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(field.label + (field.unit ? ` (${field.unit})` : "")));
+    box.appendChild(label);
+  }
+}
+
+function windowRange() {
+  if (!state.windowS) return [0, Math.max(1, state.duration)];
+  const t1 = state.t;
+  const t0 = Math.max(0, t1 - state.windowS * 1000);
+  return [t0, Math.max(t0 + 1, t1)];
+}
+
+let lastPaintAt = 0;
+function scheduleCharts() {
+  if (activeTab !== "charts") return;
+  const now = performance.now();
+  if (now - lastPaintAt < 180) return;
+  lastPaintAt = now;
+  paintCharts();
+}
+
+function paintCharts(force) {
+  if (activeTab !== "charts") return;
+  if (!state.telemetry.length) return;
+  ensureCharts();
+  const [t0, t1] = windowRange();
+  const rows = state.telemetry.filter((r) => r.elapsed_ms >= t0 && r.elapsed_ms <= t1);
+  const meta = $("telemetryMeta");
+  if (meta) meta.textContent = `${rows.length} 样本`;
+  const playhead = $("playheadMeta");
+  if (playhead) playhead.textContent = `播放头 ${fmtMs(state.t)}`;
+  for (const [key, ui] of chartCards) {
+    drawFieldChart(ui.canvas, FIELD_BY_KEY[key], ui.value, rows, t0, t1);
+  }
+  if (force) lastPaintAt = performance.now();
+}
+
+function drawFieldChart(canvas, field, valueEl, rows, t0, t1) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.floor(rect.width);
+  const h = Math.floor(rect.height);
+  // 页签隐藏时尺寸为 0：跳过绘制，切回页签后会重绘
+  if (w < 20 || h < 20) return;
+  if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const padL = 5, padR = 5, padT = 4, padB = 3;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+
+  const points = [];
+  for (const row of rows) {
+    const v = field.get(row);
+    if (v === null || v === undefined || Number.isNaN(v)) continue;
+    points.push({ t: row.elapsed_ms, v: Number(v) });
+  }
+  if (!points.length) {
+    ctx.fillStyle = "rgba(139,148,158,.7)";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText("窗口内无数据", padL + 2, h / 2 + 4);
+    valueEl.textContent = "--";
+    return;
+  }
+
+  let vmin = Math.min(...points.map((p) => p.v));
+  let vmax = Math.max(...points.map((p) => p.v));
+  if (field.fixed) {
+    [vmin, vmax] = field.fixed;
+  } else {
+    if (Math.abs(vmax - vmin) < 1e-9) { vmin -= 0.5; vmax += 0.5; }
+    const span = vmax - vmin;
+    vmin -= span * 0.12; vmax += span * 0.12;
+    if (field.zero && vmin > 0) vmin = 0;
+    if (field.zero && vmax < 0) vmax = 0;
+  }
+
+  const xOf = (t) => padL + plotW * Math.max(0, Math.min(1, (t - t0) / (t1 - t0 || 1)));
+  const yOf = (v) => padT + plotH * (1 - Math.max(0, Math.min(1, (v - vmin) / (vmax - vmin || 1))));
+
+  // 网格
+  ctx.strokeStyle = "rgba(255,255,255,0.05)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) {
+    const y = padT + plotH * i / 3;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  // 零线
+  if (field.zero) {
+    const y = yOf(0);
+    ctx.strokeStyle = "rgba(139,148,158,0.4)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 折线（缺口断开）
+  ctx.strokeStyle = field.color;
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  let started = false, prevT = null;
+  for (const p of points) {
+    if (prevT !== null && p.t - prevT > 1500) started = false;
+    const x = xOf(p.t), y = yOf(p.v);
+    if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    prevT = p.t;
+  }
+  ctx.stroke();
+
+  // 播放头（红色竖线，位置即当前回放时刻）
+  const px = xOf(state.t);
+  ctx.strokeStyle = "rgba(248,81,73,0.85)";
+  ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, h - padB); ctx.stroke();
+
+  const last = points[points.length - 1];
+  ctx.fillStyle = field.color;
+  ctx.beginPath();
+  ctx.arc(xOf(last.t), yOf(last.v), 2.4, 0, Math.PI * 2);
+  ctx.fill();
+  valueEl.textContent = Math.abs(last.v) >= 100 ? last.v.toFixed(0) : last.v.toFixed(1);
+
+  ctx.fillStyle = "rgba(139,148,158,0.75)";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText(vmax.toFixed(0), w - 2, padT);
+  ctx.textBaseline = "bottom";
+  ctx.fillText(vmin.toFixed(0), w - 2, h - 1);
+}
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => paintCharts(true), 120);
+});
+
+// ---------------------------------------------------------------------------
+// 会话加载
+// ---------------------------------------------------------------------------
+async function fetchJSON(url) {
+  const resp = await fetch(url, { cache: "no-store" });
+  const data = await resp.json();
+  if (!resp.ok || data.ok === false) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+async function init() {
+  try {
+    const data = await fetchJSON("/api/sessions");
+    const sessions = data.sessions || [];
+    const select = $("sessionSelect");
+    select.innerHTML = "";
+    if (sessions.length === 0) {
+      $("stagePlaceholder").innerHTML =
+        "<b>未找到录制会话</b><small>请用 --root 或 --dir 指定包含 session.json 的会话目录</small>";
+      return;
+    }
+    for (const s of sessions) {
+      const opt = document.createElement("option");
+      opt.value = s.dir;
+      opt.textContent = `${s.session}  (${s.complete ? "完整" : "不完整"}, ${fmtMs(s.duration_ms)})`;
+      select.appendChild(opt);
+    }
+    select.onchange = () => loadSession(select.value);
+    await loadSession(sessions[0].dir);
+  } catch (error) {
+    $("stagePlaceholder").innerHTML = `<b>回放服务连接失败</b><small>${error.message}</small>`;
+  }
+}
+
+async function loadSession(dir) {
+  const data = await fetchJSON(`/api/session?dir=${encodeURIComponent(dir)}`);
+  state.dir = data.summary.dir || dir;
+  state.summary = data.summary;
+  state.telemetry = data.telemetry || [];
+  state.videoIndex = data.video_index || [];
+  state.missingIds = data.missing_frame_ids || [];
+  state.videoElapsed = state.videoIndex.map((r) => r.elapsed_ms);
+  state.teleElapsed = state.telemetry.map((r) => r.elapsed_ms);
+  state.duration = data.summary.duration_ms || 1;
+  state.t = 0;
+  state.curVideoIndex = -1;
+  state.playing = false;
+  state.frameSeq = 0;
+  chartKeyOrder = "";
+  $("playBtn").textContent = "▶ 播放";
+
+  renderSummary();
+  renderSeriesPicker();
+  const timeline = $("timeline");
+  timeline.max = String(Math.max(1, Math.round(state.duration)));
+  timeline.value = "0";
+  timeline.oninput = () => { setPlaying(false); updateAt(Number(timeline.value)); };
+  ensureCharts();
+  updateAt(state.videoElapsed.length ? state.videoElapsed[0] : 0);
+  paintCharts(true);
+}
+
+// ---------------------------------------------------------------------------
+// 会话信息 / 当前帧渲染
+// ---------------------------------------------------------------------------
+function renderSummary() {
+  const s = state.summary;
+  setChip("statusChip", `会话状态：${s.status}`, s.complete ? "ok" : "warn");
+  setChip("sourceChip", `数据来源：${(s.image_source && (s.image_source.label || s.image_source.kind)) || "--"}`);
+  setChip("durationChip", `时长 ${fmtMs(s.duration_ms)}`);
+  const missing = s.missing_video_frames || 0;
+  setChip("missingChip", `视频缺失 ${missing} 帧`, missing > 0 ? "warn" : "ok");
+
+  const counts = s.counts || {};
+  const imageSize = s.image_size || {};
+  $("iSession").textContent = s.session || "--";
+  $("iStart").textContent = s.started_at_wall || "--";
+  $("iEnd").textContent = s.ended_at_wall || "--";
+  $("iDuration").textContent = fmtMs(s.duration_ms);
+  $("iSource").textContent = (s.image_source && (s.image_source.label || s.image_source.kind)) || "--";
+  $("iImageSize").textContent = `${imageSize.width || "--"} × ${imageSize.height || "--"}`;
+  $("iVersion").textContent = s.app_version || "--";
+  $("iFrames").textContent = counts.frames_processed ?? "--";
+  $("iTelemetry").textContent = counts.telemetry_rows ?? state.telemetry.length;
+  $("iVideo").textContent = s.video_frames_indexed ?? "--";
+  $("iVideoDropped").textContent = counts.video_frames_dropped ?? "--";
+  $("iTelemetryDropped").textContent = counts.telemetry_rows_dropped ?? "--";
+  $("iMissing").textContent = missing;
+  $("missingTag").textContent = missing > 0 ? `缺失 ${missing} 帧` : "帧完整";
+  $("missingTag").className = "tag " + (missing > 0 ? "warn" : "ok");
+  const video = s.video || {};
+  $("iVideoSize").textContent = `${video.width || "--"} × ${video.height || "--"}`;
+  $("iCodec").textContent = `${video.codec || "--"} @ ${video.nominal_fps || "--"} fps(标称)`;
+  $("iTimeBase").textContent = `时间基准：${s.time_base || "--"}`;
+  $("iFrameTsSource").textContent = `帧时间戳来源：${s.frame_timestamp_source || "--"}`;
+  // 时间关联精度（保留 M2 的"逐帧索引"语义：回放定位不使用视频标称 FPS）
+  const accuracyEl = $("iAccuracy");
+  accuracyEl.textContent = s.accurate ? "逐帧索引（精确）" : "无视频索引";
+  accuracyEl.className = "v small " + (s.accurate ? "ok" : "warn");
+  accuracyEl.title = s.accuracy_note || "";
+
+  const errors = s.errors || [];
+  $("iErrors").textContent = errors.length ? `录制错误：${errors.join("；")}` : "录制错误：无";
+  $("iErrors").className = "note" + (errors.length ? " err" : "");
+
+  const warn = $("warningLine");
+  const warnings = [];
+  if (!s.complete) warnings.push(`该会话未正常结束（status=${s.status}），文件可能不完整。`);
+  if (missing > 0) {
+    warnings.push(`遥测共 ${state.telemetry.length} 帧，但视频只写入 ${s.video_frames_indexed} 帧（缺失 ${missing} 帧）。`);
+  }
+  warn.textContent = warnings.join(" ");
+
+  // 页签 C：配置快照（服务端只读读取 session 目录 config_snapshot/runtime_params.json）
+  renderConfigSnapshot(s.config_snapshot || {});
+  $("completeTag").textContent = s.complete ? "completed" : "不完整会话";
+  $("completeTag").className = "tag " + (s.complete ? "ok" : "warn");
+
+  // 帧号范围（多段录制时 frame_id 为程序运行期全局编号）
+  const idMin = s.frame_id_min, idMax = s.frame_id_max;
+  if (idMin !== null && idMin !== undefined && idMax !== null && idMax !== undefined) {
+    $("rangeText").textContent = `帧号范围 ${idMin}~${idMax}`;
+    $("frameIdInput").placeholder = `帧号 ${idMin}~${idMax}`;
+  } else {
+    $("rangeText").textContent = "帧号范围 --";
+  }
+  if (state.teleElapsed.length >= 2) {
+    const diffs = [];
+    for (let i = 1; i < state.teleElapsed.length; i++) diffs.push(state.teleElapsed[i] - state.teleElapsed[i - 1]);
+    diffs.sort((a, b) => a - b);
+    const median = diffs[Math.floor(diffs.length / 2)];
+    $("sampleRateText").textContent = `帧间隔中位数 ${median.toFixed(1)} ms`;
+  } else {
+    $("sampleRateText").textContent = "";
+  }
+}
+
+const CONFIG_LABELS = [
+  ["exposure", "曝光", ""],
+  ["gain", "增益", ""],
+  ["bright_thresh", "亮度阈值", ""],
+  ["green_weight_thresh", "绿色权重阈值", ""],
+  ["required_frames", "连续确认帧", ""],
+  ["required_lost_frames", "连续丢失帧", ""],
+  ["turn_threshold", "转向阈值", ""],
+  ["dist_far_thresh", "远距离阈值", ""],
+  ["dist_near_thresh", "近距离阈值", ""],
+  ["min_radius", "最小半径", "px"],
+  ["max_radius", "最大半径", "px"],
+  ["min_area", "最小面积", "px²"],
+  ["max_area", "最大面积", "px²"],
+  ["min_circularity", "圆形度下限", ""],
+];
+
+function renderConfigSnapshot(snapshot) {
+  const box = $("configParams");
+  box.innerHTML = "";
+  const params = snapshot && snapshot.params;
+  const files = (snapshot && snapshot.files) || [];
+  const tag = $("configTag");
+  if (!params || typeof params !== "object") {
+    tag.textContent = files.length ? "仅有配置文件" : "无快照";
+    tag.className = "tag warn";
+    const note = $("configNote");
+    note.textContent = files.length
+      ? `该会话保存了配置文件（${files.join("、")}），但没有运行时参数快照；参数以磁盘配置为准。`
+      : "该会话未保存配置快照（早期版本录制的会话）。";
+    return;
+  }
+  for (const [key, label, unit] of CONFIG_LABELS) {
+    if (params[key] === undefined) continue;
+    const row = document.createElement("div");
+    row.className = "kv";
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = label;
+    const v = document.createElement("span");
+    v.className = "v mono";
+    const value = params[key];
+    v.textContent = (typeof value === "number" ? String(value) : String(value)) + (unit ? ` ${unit}` : "");
+    row.appendChild(k);
+    row.appendChild(v);
+    box.appendChild(row);
+  }
+  tag.textContent = `${files.length} 个文件`;
+  tag.className = "tag ok";
+  $("configNote").textContent =
+    "运行时参数为录制时主程序实际生效值（config_snapshot/runtime_params.json）；与 config_snapshot/debug.yaml 的磁盘配置可能不同。";
+}
+
+function requestFrame(videoIndex) {
+  if (videoIndex < 0 || videoIndex === state.curVideoIndex) return;
+  state.curVideoIndex = videoIndex;
+  const seq = ++state.frameSeq;
+  const img = new Image();
+  img.onload = () => {
+    if (seq !== state.frameSeq) return;
+    $("videoImage").src = img.src;
+    $("stagePlaceholder").hidden = true;
+  };
+  img.onerror = () => {
+    if (seq !== state.frameSeq) return;
+    $("stagePlaceholder").hidden = false;
+    $("stagePlaceholder").innerHTML = "<b>该时段视频帧不可读</b><small>可能是录制异常结束时未写入的文件尾部</small>";
+  };
+  img.src = `/api/frame?dir=${encodeURIComponent(state.dir)}&index=${videoIndex}&_=${seq}`;
+}
+
+function renderTelemetry(row) {
+  if (!row) return;
+  const detected = !!row.detected;
+  $("detectState").textContent = detected ? "检测到有效引导灯" : "未检测到有效引导灯";
+  $("detectState").style.color = detected ? "var(--green)" : "var(--red)";
+  $("detectSub").textContent = `tracking=${row.tracking ? "true" : "false"}`;
+  setText("vFrameId", String(row.frame_id), "mono");
+  setText("vElapsed", fmtMs(row.elapsed_ms), "mono");
+  setText("vTargetX", detected ? fmt(row.target_x) : "--", detected ? "big blue" : "big muted");
+  setText("vTargetY", detected ? fmt(row.target_y) : "--", detected ? "big cyan" : "big muted");
+  setText("vOffsetX", detected ? fmt(row.offset_x) : "--", detected ? "" : "muted");
+  setText("vOffsetY", detected ? fmt(row.offset_y) : "--", detected ? "" : "muted");
+  setText("vLock", `${row.lock_frames}/${row.required_frames} · 丢 ${row.lost_frames}/${row.required_lost_frames}`, "muted");
+  setText("vRadius", detected ? fmt(row.radius, 1) : "--", "muted");
+  const t = turnText(row.turn_flag);
+  setText("vTurn", t.text, t.cls);
+  const d = distText(row.distance_flag);
+  setText("vDistance", d.text, d.cls);
+  const clearMissing = row.clear_flag === null || row.clear_flag === undefined;
+  setText("vClear", clearMissing ? "未发送(null)" : fmt(row.clear_flag),
+    clearMissing ? "muted" : "");
+  setText("vTxSent", row.tx_sent ? "是" : "否", row.tx_sent ? "ok" : "muted");
+  $("txTag").textContent = row.tx_sent ? "已发送" : "未发送";
+  $("txTag").className = "tag " + (row.tx_sent ? "ok" : "");
+  $("txNote").textContent = row.tx_sent
+    ? `实际发送 T=${fmt(row.tx_turn_flag)} · D=${fmt(row.tx_distance_flag)} · C=${fmt(row.tx_clear_flag)}`
+    : "本帧未发送串口指令";
+  setText("vFps", fmt(row.fps), "ok");
+  setText("vProc", `${fmt(row.processing_time_ms)} ms`, "warn");
+  setText("vGreen", String(row.green_pixels), "muted");
+  setText("vCandidates", String(row.candidate_count), "muted");
+  setText("vTimestamp", String(row.timestamp_us), "small mono");
+  setText("vImageSize", `${row.image_width} × ${row.image_height}`, "small muted");
+  setText("vImageCenter", `${fmt(row.image_center_x, 0)}, ${fmt(row.image_center_y, 0)}`, "small muted");
+  const note = $("frameNote");
+  if (detected) {
+    note.className = "note";
+    note.textContent = `偏差相对画面中心 (${fmt(row.image_center_x, 0)}, ${fmt(row.image_center_y, 0)}) · 单位 px`;
+  } else {
+    note.className = "note warn";
+    note.textContent = "未检测到目标：算法输出的 (0,0) 为占位值，不作为测量结果显示";
+  }
+}
+
+function updateAt(t) {
+  state.t = Math.max(0, Math.min(t, state.duration));
+  const timeline = $("timeline");
+  timeline.value = String(Math.round(state.t));
+  $("timeText").textContent = `${fmtMs(state.t)} / ${fmtMs(state.duration)}`;
+
+  const ti = lastIndexLE(state.teleElapsed, state.t);
+  renderTelemetry(ti >= 0 ? state.telemetry[ti] : (state.telemetry[0] || null));
+
+  let vi = lastIndexLE(state.videoElapsed, state.t);
+  if (vi < 0 && state.videoIndex.length) vi = 0;
+  const lostAtThisTime = vi >= 0 && state.videoElapsed.length &&
+    (state.t - state.videoElapsed[vi]) > 500;
+  if (vi >= 0 && vi < state.videoIndex.length && !lostAtThisTime) {
+    requestFrame(vi);
+    const entry = state.videoIndex[vi];
+    $("frameBadge").textContent = `video #${vi}`;
+    $("sourceFrameBadge").textContent = `帧 ${entry.source_frame_id}`;
+    $("frameText").textContent = `帧 ${entry.source_frame_id}`;
+    $("timeBadge").textContent = `${fmtMs(state.t)} / ${fmtMs(state.duration)}`;
+    $("missHint").textContent = "";
+    $("vVideoIdx").textContent = `video #${vi}`;
+    $("vSourceFrame").textContent = String(entry.source_frame_id);
+    $("vVideoElapsed").textContent = fmtMs(entry.elapsed_ms);
+    $("videoTag").textContent = `video #${vi}`;
+  } else {
+    $("frameBadge").textContent = vi >= 0 ? `最近视频帧 #${vi}` : "video --";
+    $("sourceFrameBadge").textContent = "帧 --";
+    $("frameText").textContent = "帧 --（该时段无视频）";
+    $("vVideoIdx").textContent = vi >= 0 ? `最近 video #${vi}` : "--";
+    $("vSourceFrame").textContent = "--";
+    $("vVideoElapsed").textContent = "--";
+    $("videoTag").textContent = "无视频帧";
+    $("timeBadge").textContent = `${fmtMs(state.t)} / ${fmtMs(state.duration)}`;
+    $("missHint").textContent = "该时段无视频帧";
+    $("stagePlaceholder").hidden = false;
+    $("stagePlaceholder").innerHTML =
+      "<b>当前时刻没有视频帧</b><small>该时段视频帧未成功写入（见缺失帧统计），遥测数据仍然可用</small>";
+  }
+  scheduleCharts();
+}
+
+// ---------------------------------------------------------------------------
+// 播放控制
+// ---------------------------------------------------------------------------
+function setPlaying(playing) {
+  state.playing = playing;
+  $("playBtn").textContent = playing ? "⏸ 暂停" : "▶ 播放";
+  state.lastTick = performance.now();
+}
+
+function tick(now) {
+  if (state.playing) {
+    const dt = (now - state.lastTick) * state.speed;
+    state.lastTick = now;
+    let t = state.t + dt;
+    if (t >= state.duration) { t = state.duration; setPlaying(false); }
+    updateAt(t);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+$("playBtn").onclick = () => {
+  if (!state.telemetry.length) return;
+  if (!state.playing && state.t >= state.duration) state.t = 0;
+  setPlaying(!state.playing);
+};
+
+function stepFrames(dir) {
+  setPlaying(false);
+  let ti = lastIndexLE(state.teleElapsed, state.t);
+  if (ti < 0) ti = 0;
+  ti = Math.max(0, Math.min(state.teleElapsed.length - 1, ti + dir));
+  updateAt(state.teleElapsed[ti]);
+  paintCharts(true);
+}
+function stepSeconds(delta) {
+  setPlaying(false);
+  updateAt(state.t + delta * 1000);
+  paintCharts(true);
+}
+$("prevBtn").onclick = () => stepFrames(-1);
+$("nextBtn").onclick = () => stepFrames(1);
+$("stepBackBtn").onclick = () => stepSeconds(-1);
+$("stepFwdBtn").onclick = () => stepSeconds(1);
+$("speedSelect").onchange = () => { state.speed = parseFloat($("speedSelect").value) || 1; };
+$("windowSelect").onchange = () => {
+  state.windowS = parseInt($("windowSelect").value, 10) || 0;
+  paintCharts(true);
+};
+
+$("locateBtn").onclick = () => {
+  const frameId = Number($("frameIdInput").value);
+  if (!Number.isFinite(frameId) || frameId <= 0) {
+    $("locateResult").textContent = "请输入有效帧号";
+    return;
+  }
+  const row = state.telemetry.find((r) => r.frame_id === frameId);
+  if (!row) {
+    const s = state.summary || {};
+    const range = (s.frame_id_min !== null && s.frame_id_min !== undefined)
+      ? `${s.frame_id_min}~${s.frame_id_max}` : "未知";
+    $("locateResult").textContent = `帧 ${frameId} 不存在（本会话帧号范围 ${range}）`;
+    return;
+  }
+  setPlaying(false);
+  updateAt(row.elapsed_ms);
+  paintCharts(true);
+  $("locateResult").textContent = `已定位 frame ${frameId} @ ${fmtMs(row.elapsed_ms)}`;
+};
+
+// ---------------------------------------------------------------------------
+// 视频全屏（Fullscreen API + 页面内全屏兜底；双击画面切换，Esc 退出）
+// ---------------------------------------------------------------------------
+function syncFsLabel() {
+  const on = document.fullscreenElement === $("videoPanel") ||
+    $("videoPanel").classList.contains("faux-fullscreen");
+  $("fsBtn").textContent = on ? "退出全屏" : "全屏";
+}
+function setFauxFullscreen(on) {
+  $("videoPanel").classList.toggle("faux-fullscreen", on);
+  syncFsLabel();
+}
+function toggleFullscreen() {
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  if ($("videoPanel").classList.contains("faux-fullscreen")) { setFauxFullscreen(false); return; }
+  const panel = $("videoPanel");
+  const request = panel.requestFullscreen || panel.webkitRequestFullscreen;
+  if (!request) { setFauxFullscreen(true); return; }
+  let settled = false;
+  Promise.resolve(request.call(panel)).then(() => { settled = true; syncFsLabel(); })
+    .catch(() => { settled = true; setFauxFullscreen(true); });
+  setTimeout(() => {
+    if (!settled && !document.fullscreenElement) setFauxFullscreen(true);
+  }, 400);
+}
+document.addEventListener("fullscreenchange", syncFsLabel);
+$("fsBtn").onclick = toggleFullscreen;
+$("videoImage").addEventListener("dblclick", toggleFullscreen);
+
+document.addEventListener("keydown", (e) => {
+  if (e.target && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(e.target.tagName)) return;
+  if (e.key === "Escape" && $("videoPanel").classList.contains("faux-fullscreen")) {
+    setFauxFullscreen(false);
+    return;
+  }
+  if (e.code === "Space") { e.preventDefault(); $("playBtn").click(); }
+  else if (e.code === "ArrowLeft") { e.preventDefault(); stepSeconds(-1); }
+  else if (e.code === "ArrowRight") { e.preventDefault(); stepSeconds(1); }
+});
+
+// ---------------------------------------------------------------------------
+// 启动
+// ---------------------------------------------------------------------------
+init();
+</script>
+</body>
+</html>

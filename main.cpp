@@ -5,6 +5,10 @@
  * @date 2025-10-24
  */
 
+#include <atomic>
+#include <csignal>
+#include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <vector>
 #include <chrono>
@@ -19,35 +23,58 @@
 #include "Tool/Utils.h"
 #include "web_debug/DebugTelemetry.h"
 #include "web_debug/FrameSource.h"
+#include "web_debug/Recorder.h"
 
 using namespace cv;
 using namespace std;
 
 namespace
 {
+std::atomic<bool> g_shutdown_requested{false};
+
+/** 信号处理：只置退出标志（async-signal-safe），由主循环完成后台线程收尾 */
+void handleShutdownSignal(int)
+{
+    g_shutdown_requested.store(true);
+}
+
+void installSignalHandlers()
+{
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handleShutdownSignal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // 不设置 SA_RESTART：让阻塞中的 waitKey 等调用被中断并回到主循环
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+}
+
 /**
- * @brief M1 调试链路命令行参数
+ * @brief 调试链路命令行参数（全部可选）
  *
- * 全部为可选参数，不指定时行为与原有主程序完全一致（海康相机 + 串口 + GUI）。
+ * 不指定时行为与原有主程序一致：海康相机 + 串口 + GUI + 录制开启。
  */
 struct CliOptions
 {
     std::string sourceSpec;        // 空 = 海康工业相机；synthetic / image:<path> / video:<path>
     bool forceSimSerial = false;   // --no-serial: 跳过串口打开，仅模拟发送
     bool showGui = true;           // --no-gui: 不创建 OpenCV 窗口（无头测试/服务器）
-    bool recordVideo = true;       // --no-record: 不写 record.avi（无头测试时避免磁盘占用）
+    bool recordEnabled = true;     // --record / --no-record: 录制系统开关（覆盖配置）
+    std::string recordRoot;        // --record-root: 录制会话根目录（覆盖配置）
     int webDebugOverride = -1;     // -1=跟随配置文件, 0=强制关闭, 1=强制开启
 };
 
 void printUsage(const char *prog)
 {
-    cout << "飞镖制导系统（含 M1 Web 调试链路）\n"
+    cout << "飞镖制导系统（含 M1 Web 调试 + M2 数据录制）\n"
          << "用法: " << prog << " [选项]\n"
          << "  --source <spec>     使用模拟视频源（默认使用海康工业相机）\n"
          << "                      spec: synthetic | synthetic:none | image:<path> | video:<path>\n"
          << "  --no-serial         不打开串口，使用模拟发送（无电控环境测试）\n"
          << "  --no-gui            不创建 OpenCV 显示窗口（无头运行）\n"
-         << "  --no-record         不写 record.avi（无头测试时避免磁盘占用）\n"
+         << "  --record            启用录制（覆盖配置 recording.enabled）\n"
+         << "  --no-record         关闭录制（不生成会话目录/CSV/视频）\n"
+         << "  --record-root <dir> 指定录制会话根目录（覆盖配置 recording.root）\n"
          << "  --web-debug         强制启用 Web 调试数据发布（覆盖配置）\n"
          << "  --no-web-debug      强制关闭 Web 调试数据发布（覆盖配置）\n"
          << "  -h, --help          显示帮助\n";
@@ -65,8 +92,12 @@ CliOptions parseCli(int argc, char **argv)
             opt.forceSimSerial = true;
         else if (arg == "--no-gui")
             opt.showGui = false;
+        else if (arg == "--record")
+            opt.recordEnabled = true;
         else if (arg == "--no-record")
-            opt.recordVideo = false;
+            opt.recordEnabled = false;
+        else if (arg == "--record-root" && i + 1 < argc)
+            opt.recordRoot = argv[++i];
         else if (arg == "--web-debug")
             opt.webDebugOverride = 1;
         else if (arg == "--no-web-debug")
@@ -86,6 +117,7 @@ CliOptions parseCli(int argc, char **argv)
 int main(int argc, char **argv)
 {
     const CliOptions cli = parseCli(argc, argv);
+    installSignalHandlers();
 
     // 调试配置: true 时持续发送测试值，false 时根据视觉结果发送控制指令
     bool testCommMode = false;
@@ -115,6 +147,15 @@ int main(int argc, char **argv)
     int webDebugPublishFps = 20;
     int webDebugJpegQuality = 75;
     std::string cameraSerialNumber = "unknown";
+
+    // M2 数据录制配置（config/debug.yaml 的 recording 段，可被命令行覆盖）
+    bool recordEnabled = true;
+    bool recordAutoStart = true;
+    std::string recordRoot = "recordings";
+    int recordVideoScale = 1;
+    double recordVideoFps = 30.0;
+    int recordQueueCapacity = 64;
+    int recordControlPort = 5011;
 
     try
     {
@@ -193,6 +234,25 @@ int main(int argc, char **argv)
                 webDebugPublishFps = wd["publish_fps"].as<int>();
             if (wd["jpeg_quality"])
                 webDebugJpegQuality = wd["jpeg_quality"].as<int>();
+        }
+        // M2：数据录制配置（可选段，缺省时使用内置默认值）
+        if (config["recording"])
+        {
+            auto rc = config["recording"];
+            if (rc["enabled"])
+                recordEnabled = rc["enabled"].as<bool>();
+            if (rc["auto_start"])
+                recordAutoStart = rc["auto_start"].as<bool>();
+            if (rc["root"])
+                recordRoot = rc["root"].as<std::string>();
+            if (rc["video_scale"])
+                recordVideoScale = rc["video_scale"].as<int>();
+            if (rc["video_fps"])
+                recordVideoFps = rc["video_fps"].as<double>();
+            if (rc["queue_capacity"])
+                recordQueueCapacity = rc["queue_capacity"].as<int>();
+            if (rc["control_port"])
+                recordControlPort = rc["control_port"].as<int>();
         }
         if (config["detection"] && config["detection"]["shape_filter"])
         {
@@ -334,7 +394,50 @@ int main(int argc, char **argv)
     telemetry.configure(webOptions);
     telemetry.start();
 
-    // 5. 主循环
+    // 5. M2 数据录制（独立后台线程 + 会话目录；不依赖 Flask / 浏览器）
+    if (!cli.recordEnabled)
+        recordEnabled = false;
+    if (!cli.recordRoot.empty())
+        recordRoot = cli.recordRoot;
+
+    // 运行时实际生效参数快照（来自主程序变量，可能与磁盘 YAML 不同）
+    char runtimeParams[1024];
+    std::snprintf(
+        runtimeParams, sizeof(runtimeParams),
+        "{\"turn_threshold\":%.4g,\"dist_far_thresh\":%.4g,\"dist_near_thresh\":%.4g,"
+        "\"bright_thresh\":%d,\"green_weight_thresh\":%.4g,\"min_circularity\":%.4g,"
+        "\"min_aspect_ratio\":%.4g,\"max_aspect_ratio\":%.4g,\"min_area\":%d,\"max_area\":%d,"
+        "\"min_radius\":%d,\"max_radius\":%d,\"exposure\":%d,\"gain\":%d,"
+        "\"required_frames\":%d,\"required_lost_frames\":%d}",
+        turnThreshold, distFarThresh, distNearThresh, brightThresh, greenWeightX100 / 100.0,
+        circularityX100 / 100.0, minAspX100 / 100.0, maxAspX100 / 100.0, minArea, maxArea,
+        minRadius, maxRadius, exposure, gain, detector.getRequiredFrames(),
+        detector.getRequiredLostFrames());
+
+    webdebug::RecordOptions recordOptions;
+    recordOptions.enabled = recordEnabled;
+    recordOptions.auto_start = recordAutoStart;
+    {
+        std::filesystem::path root(recordRoot);
+        if (root.is_relative())
+            root = projectRootDir / root;
+        recordOptions.root = root.lexically_normal().string();
+    }
+    recordOptions.video_scale = recordVideoScale;
+    recordOptions.video_fps = recordVideoFps;
+    recordOptions.queue_capacity = recordQueueCapacity;
+    recordOptions.control_port = recordControlPort;
+    recordOptions.source = webOptions.source;
+    recordOptions.source_label = webOptions.source_label;
+    recordOptions.mode = webOptions.mode;
+    recordOptions.config_path = std::filesystem::absolute(loadedConfigPath).string();
+    recordOptions.runtime_params_json = runtimeParams;
+    recordOptions.app_version = "DART-WEB-M2 (base M1 commit 0f3ac03)";
+    webdebug::Recorder recorder;
+    recorder.configure(recordOptions);
+    recorder.start();
+
+    // 6. 主循环
     Mat image;
     Mat resizedImage;
     Mat displayImage;
@@ -344,12 +447,12 @@ int main(int argc, char **argv)
     Size originalSize;
     Size displaySize;
     Size resultSize;
-    cv::VideoWriter videoWriter;
 
     auto lastFrameTime = std::chrono::steady_clock::now();
     double fpsEma = 0.0;
+    uint64_t frameCounter = 0;
 
-    while (true)
+    while (!g_shutdown_requested.load())
     {
         if (serialWatchdog && !serial.IsSimulated() && !serial.IsOpen())
         {
@@ -384,9 +487,6 @@ int main(int argc, char **argv)
             originalSize = image.size();
             displaySize = Size(originalSize.width / DISPLAY_SCALE, originalSize.height / DISPLAY_SCALE);
             resultSize = Size(originalSize.width * RESULT_SCALE, originalSize.height * RESULT_SCALE);
-            if (cli.recordVideo)
-                videoWriter.open((runLogDir / "record.avi").string(),
-                                 cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 30, resultSize);
         }
 
         detector.setBrightThresh(brightThresh);
@@ -401,6 +501,10 @@ int main(int argc, char **argv)
         const auto detectEndTime = std::chrono::steady_clock::now();
         const double processingTimeMs =
             std::chrono::duration<double, std::milli>(detectEndTime - frameStartTime).count();
+        const int64_t frameTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                             detectEndTime.time_since_epoch())
+                                             .count();
+        const uint64_t frameId = ++frameCounter;
         {
             const double dt = std::chrono::duration<double>(frameStartTime - lastFrameTime).count();
             lastFrameTime = frameStartTime;
@@ -408,6 +512,23 @@ int main(int argc, char **argv)
             {
                 const double instantFps = 1.0 / dt;
                 fpsEma = (fpsEma <= 0.0) ? instantFps : fpsEma * 0.9 + instantFps * 0.1;
+            }
+        }
+
+        // 周期性主循环统计（每 5 秒）：无预览/无录制时也能确认算法实际帧率
+        {
+            static auto lastStatsTime = std::chrono::steady_clock::now();
+            static uint64_t lastStatsFrames = 0;
+            if (detectEndTime - lastStatsTime > std::chrono::seconds(5))
+            {
+                const double statsElapsed =
+                    std::chrono::duration<double>(detectEndTime - lastStatsTime).count();
+                const uint64_t statsDelta = frameId - lastStatsFrames;
+                const double loopFps = statsElapsed > 1e-6 ? statsDelta / statsElapsed : 0.0;
+                cout << "[Main] loop fps=" << loopFps << " frames=" << frameId
+                     << " frame_ms=" << processingTimeMs << endl;
+                lastStatsTime = detectEndTime;
+                lastStatsFrames = frameId;
             }
         }
 
@@ -493,6 +614,41 @@ int main(int argc, char **argv)
             telemetry.publish(debugFrame);
         }
 
+        // M2：录制本帧（逐帧遥测 CSV 直接写；视频帧进入有界队列由后台线程编码落盘）
+        {
+            webdebug::RecordFrame recordFrame;
+            recordFrame.image = detector.getDebugImage();
+            recordFrame.frame_id = frameId;
+            recordFrame.timestamp_us = frameTimestampUs;
+            recordFrame.detected = target.detected;
+            recordFrame.tracking = detector.isTracking();
+            recordFrame.target_x = target.center.x;
+            recordFrame.target_y = target.center.y;
+            recordFrame.radius = target.radius;
+            recordFrame.image_width = image.cols;
+            recordFrame.image_height = image.rows;
+            const Point2f imageCenter = detector.getImageCenter();
+            recordFrame.image_center_x = imageCenter.x;
+            recordFrame.image_center_y = imageCenter.y;
+            recordFrame.offset_x = target.detected ? (target.center.x - imageCenter.x) : 0.0f;
+            recordFrame.offset_y = target.detected ? (target.center.y - imageCenter.y) : 0.0f;
+            recordFrame.turn_flag = target.turnFlag;
+            recordFrame.distance_flag = target.distanceFlag;
+            recordFrame.tx_sent = txSent;
+            recordFrame.tx_turn_flag = txTurn;
+            recordFrame.tx_distance_flag = txDist;
+            recordFrame.tx_clear_flag = txClear;
+            recordFrame.lock_frames = detector.getConsecutiveFrames();
+            recordFrame.required_frames = detector.getRequiredFrames();
+            recordFrame.lost_frames = detector.getLostFrames();
+            recordFrame.required_lost_frames = detector.getRequiredLostFrames();
+            recordFrame.green_pixels = detector.getGreenPixelCount();
+            recordFrame.candidate_count = detector.getCandidateCount();
+            recordFrame.fps = fpsEma;
+            recordFrame.processing_time_ms = processingTimeMs;
+            recorder.submitFrame(recordFrame);
+        }
+
         if (cli.showGui)
         {
             if (target.detected)
@@ -517,11 +673,6 @@ int main(int argc, char **argv)
             }
         }
 
-        if (videoWriter.isOpened() && !displayImage.empty())
-        {
-            videoWriter.write(displayImage);
-        }
-
         if (cli.showGui)
         {
             if (waitKey(1) == 27)
@@ -536,6 +687,7 @@ int main(int argc, char **argv)
         }
     }
 
+    recorder.stop();
     telemetry.stop();
     serial.Close();
     if (cli.showGui)

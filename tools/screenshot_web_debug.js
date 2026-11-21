@@ -1,4 +1,5 @@
 // M1 Web 调试界面截图脚本（仅本地验证用，不进入交付代码）
+// 注：M2-UI 后页面已改为「顶栏 / 视频 / 页签 / 底栏」结构，本脚本的 DOM 引用已同步。
 // 用法: NODE_PATH=$(npm root -g) node tools/screenshot_web_debug.js <url> <output.png> [width] [height] [waitMs]
 const puppeteer = require("puppeteer");
 
@@ -49,7 +50,7 @@ const chromePath = process.env.HOME +
                 const el = document.getElementById(id);
                 return el ? el.textContent.trim() : null;
             };
-            const canvases = Array.from(document.querySelectorAll(".chart canvas")).map((c) => ({
+            const canvases = Array.from(document.querySelectorAll(".chart-card canvas")).map((c) => ({
                 id: c.id,
                 width: c.width,
                 height: c.height,
@@ -65,9 +66,9 @@ const chromePath = process.env.HOME +
                 distance: text("vDistance"),
                 clear: text("vClear"),
                 txSent: text("vTxSent"),
-                perfLine: text("vPerfLine"),
-                receiver: text("fReceiver"),
-                seq: text("fSeq"),
+                perfLine: text("perfNote"),
+                receiver: text("boLink"),
+                seq: text("footSeq"),
                 canvases,
                 videoComplete: (() => {
                     const img = document.getElementById("videoImage");
