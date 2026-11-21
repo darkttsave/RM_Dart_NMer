@@ -155,16 +155,28 @@ def main():
         elapsed = [int(row["elapsed_us"]) for row in telemetry]
         t_min, t_max = (min(elapsed), max(elapsed)) if elapsed else (0, 0)
         if events:
-            ev = events[0]
+            # M4 起 events.jsonl 同时包含参数事件（parameter_changed）与人工记录（manual_note），
+            # 本脚本按类型分别校验（人工记录由机械调试台产生，见 M4 报告）。
+            param_events = [e for e in events if e.get("type", "parameter_changed") == "parameter_changed"]
+            manual_events = [e for e in events if e.get("type") == "manual_note"]
+            ev = param_events[0] if param_events else events[0]
             check("事件时间在会话范围内", t_min <= ev["elapsed_us"] <= t_max,
                   f"{ev['elapsed_us']} in [{t_min}, {t_max}]")
             check("事件帧号存在于遥测", ev["frame_id"] in frame_ids,
                   f"frame_id={ev['frame_id']}")
-            check("事件结构与来源完整",
-                  all(k in ev for k in ("type", "elapsed_us", "frame_id", "source",
-                                        "parameter", "old_value", "new_value", "result")),
-                  ev.get("source", ""))
-            check("只记录实际生效的修改", all(e.get("result") == "applied" for e in events))
+            check("参数事件结构与来源完整",
+                  all(k in e for e in param_events
+                      for k in ("elapsed_us", "frame_id", "source",
+                                "parameter", "old_value", "new_value", "result")),
+                  f"{len(param_events)} 条参数事件")
+            check("只记录实际生效的修改",
+                  all(e.get("result") == "applied" for e in param_events),
+                  f"{len(param_events)} 条")
+            if manual_events:
+                check("人工记录事件结构完整",
+                      all(e.get("source") == "manual" and e.get("result") == "recorded"
+                          and bool(e.get("note")) for e in manual_events),
+                      f"{len(manual_events)} 条人工记录")
 
     passed = sum(1 for _, ok, _ in CHECKS if ok)
     print(f"\n== 结果: {passed}/{len(CHECKS)} 通过 ==")

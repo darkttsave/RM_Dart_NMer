@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DART 视觉调试台 · 机械与电控</title>
+<!-- M4：机械与电控调试台（无相机视频区；复用同一 Flask 服务与运行状态数据） -->
+<link rel="stylesheet" href="/static/dashboard.css?v=m4b">
+<style>
+/* 机械与电控页少量覆盖样式（通用样式见 /static/dashboard.css） */
+.record-btn{
+  background:rgba(63,185,80,.12); border:1px solid rgba(63,185,80,.45); color:var(--green);
+  border-radius:6px; padding:3px 10px; font-size:11px; font-family:inherit; cursor:pointer;
+  white-space:nowrap; flex:0 0 auto;
+}
+.record-btn:hover{background:rgba(63,185,80,.2);}
+.record-btn.danger{background:rgba(248,81,73,.12); border-color:rgba(248,81,73,.45); color:var(--red);}
+.record-btn:disabled{opacity:.55; cursor:not-allowed;}
+.mech-sub-title{font-size:11px; color:var(--dim); letter-spacing:.5px; margin:8px 0 4px; padding-top:6px;
+  border-top:1px dashed #1c2634;}
+.mech-sub-title:first-child{margin-top:0; padding-top:0; border-top:0;}
+</style>
+</head>
+<body>
+<div class="app mech">
+
+  <!-- ==================== 顶部：统一导航 + 运行状态 ==================== -->
+  <header class="topbar">
+    <div class="brand"><b>DART</b><span>机械与电控调试台</span></div>
+    <nav class="workbench-nav" aria-label="工作台切换">
+      <a class="wb-link" href="/">视觉调试</a>
+      <a class="wb-link active" href="/mechanical">机械与电控</a>
+      <a class="wb-link" href="{{ playback_url }}" target="_blank" rel="noopener">历史回放</a>
+    </nav>
+    <span class="chip" id="linkChip" title="Flask 与 C++ 视觉程序的 TCP 调试帧链路">
+      <i class="dot"></i><span id="linkText">等待视觉程序…</span>
+    </span>
+    <span class="chip" id="recordChip" title="本地录制状态（录制主体在 C++ 侧）">录制：--</span>
+    <button class="record-btn" id="recordToggleBtn" type="button">开始录制</button>
+    <span class="chip hide-md" id="boardChip" title="电控遥测接口状态">电控遥测：待接入</span>
+    <div class="spacer"></div>
+    <span class="chip hide-md" id="sourceChip">数据来源：--</span>
+    <span id="clock" class="mono">--:--:--</span>
+  </header>
+
+  <main class="mech-grid">
+    <!-- 摘要行：当前目标 / 飞镖 / 运行阶段 / 通信 -->
+    <section class="mech-summary">
+      <div class="summary-card">
+        <span class="sc-label">当前目标编号</span>
+        <span class="sc-value waiting" id="sumTarget">待接入</span>
+      </div>
+      <div class="summary-card">
+        <span class="sc-label">当前飞镖编号</span>
+        <span class="sc-value waiting" id="sumDart">待接入</span>
+      </div>
+      <div class="summary-card">
+        <span class="sc-label">运行阶段（电控）</span>
+        <span class="sc-value waiting" id="sumStage">待接入</span>
+      </div>
+      <div class="summary-card">
+        <span class="sc-label">通信在线</span>
+        <span class="sc-value warn" id="sumComm">视觉链路 --</span>
+      </div>
+    </section>
+
+    <!-- 左：电控遥测曲线（主要观测界面） -->
+    <section class="panel mech-charts">
+      <div class="panel-head">
+        <h2>电控遥测曲线<span class="panel-sub">主要观测区 · 按用途选择</span></h2>
+        <span class="tag" id="chartTag">待接入</span>
+      </div>
+      <div class="panel-body">
+        <div class="mech-chart-groups" id="chartGroups"></div>
+        <div class="mech-chart-body">
+          <b>电控遥测待接入</b>
+          <span>视觉程序通过 15 字节串口<b>单向发送</b>控制指令，未接收电控遥测；<br>
+            协议确认后此处按分组显示独立纵轴曲线，不使用模拟曲线冒充真实数据。</span>
+          <span id="chartSelection" style="color:var(--muted);">已选择 2 项（角度与位置 · 蓄力相关参数）</span>
+          <span style="color:var(--dim); font-size:10.5px;">预留字段：Yaw 目标/实际 · 蓄力目标/实际 · 电机状态 · 运动参数 · 电控阶段（接入后按分组绘制）</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右：页签（状态 / 参数 / 运行 / 人工记录） -->
+    <aside class="side mech-side">
+      <nav class="side-tabs" role="tablist" aria-label="机械与电控面板切换">
+        <button class="side-tab active" id="mechTabBtnStatus" type="button"
+                role="tab" aria-selected="true" aria-controls="mechTabStatus">状态</button>
+        <button class="side-tab" id="mechTabBtnParams" type="button"
+                role="tab" aria-selected="false" aria-controls="mechTabParams">参数</button>
+        <button class="side-tab" id="mechTabBtnRuntime" type="button"
+                role="tab" aria-selected="false" aria-controls="mechTabRuntime">运行</button>
+        <button class="side-tab" id="mechTabBtnNotes" type="button"
+                role="tab" aria-selected="false" aria-controls="mechTabNotes">人工记录</button>
+      </nav>
+      <div class="tab-panels">
+
+        <!-- 页签 A：机械与电控状态 -->
+        <div class="tab-pane" id="mechTabStatus" role="tabpanel" aria-labelledby="mechTabBtnStatus">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>机械与电控状态<span class="panel-sub">电机 / 机构 / 通信</span></h2>
+              <span class="tag" id="boardStatusTag">待接入</span>
+            </div>
+            <div class="panel-body">
+              <div class="mech-sim-row">
+                <label title="仅为界面演示，不写入录制，不代表设备实测值">
+                  <input type="checkbox" id="simToggle"> 模拟数据预览（界面演示，不写入录制）
+                </label>
+                <span class="state-badge simulated" id="simBadge" hidden>SIM</span>
+              </div>
+              <div class="legend-row">
+                <span><i class="lg ok"></i>真实接入</span>
+                <span><i class="lg sim"></i>模拟数据</span>
+                <span><i class="lg manual"></i>人工记录</span>
+                <span><i class="lg waiting"></i>待接入</span>
+              </div>
+              <div id="boardStatusFields"></div>
+              <div class="note wrap" id="boardStatusNote" style="margin-top:8px;">--</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 页签 B：机械与电控参数 -->
+        <div class="tab-pane" id="mechTabParams" role="tabpanel" aria-labelledby="mechTabBtnParams" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>机械与电控参数<span class="panel-sub">目标值 / 实际值</span></h2>
+              <span class="tag" id="paramStatusTag">待接入</span>
+            </div>
+            <div class="panel-body">
+              <div class="mech-sub-title">电控参数（目标 / 实际）</div>
+              <div id="boardParamFields"></div>
+              <div class="mech-sub-title">视觉侧关联（只读 · 来源 C++ 视觉算法）</div>
+              <div id="visualInputFields"></div>
+              <div class="note wrap">电控参数暂无实测数据：协议确认后由 /api/board 提供目标值/实际值，人工记录可先写入会话事件。</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 页签 C：运行状态 -->
+        <div class="tab-pane" id="mechTabRuntime" role="tabpanel" aria-labelledby="mechTabBtnRuntime" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>会话运行状态<span class="panel-sub">真实数据</span></h2>
+              <span class="tag" id="runtimeTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div id="runtimeFields"></div>
+              <div class="note wrap">数据来自 C++ Recorded 状态与 Flask 接收链路；页面切换不影响录制。</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 页签 D：人工调试记录 -->
+        <div class="tab-pane" id="mechTabNotes" role="tabpanel" aria-labelledby="mechTabBtnNotes" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>人工调试记录<span class="panel-sub">写入当前会话 events.jsonl</span></h2>
+              <span class="tag" id="noteTag">--</span>
+            </div>
+            <div class="panel-body">
+              <div class="note-input-row">
+                <input id="noteInput" type="text" maxlength="200"
+                       placeholder="例如：Yaw 机构紧固后复测 / 蓄力弹簧更换">
+                <button class="btn small primary" id="noteBtn" type="button">记录</button>
+              </div>
+              <div class="note wrap" id="noteMsg">录制期间记录会写入当前会话，回放页「事件记录」可查看；未录制时不会写入。</div>
+              <div class="mech-sub-title">记录说明</div>
+              <div class="note wrap">人工记录来源标记为 manual，与参数事件同一会话时间轴；回放页可定位到对应时间与视频帧。</div>
+            </div>
+          </section>
+        </div>
+
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v, digits = 1) => (v === null || v === undefined || Number.isNaN(Number(v)))
+  ? "--" : Number(v).toFixed(digits);
+
+function setChip(id, text, cls) {
+  const el = $(id);
+  if (!el) return;
+  const span = el.querySelector("span");
+  if (span) span.textContent = text; else el.textContent = text;
+  el.classList.remove("ok", "warn", "err", "info");
+  if (cls) el.classList.add(...cls.split(" ").filter(Boolean));
+}
+
+function updateClock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  $("clock").textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+setInterval(updateClock, 1000); updateClock();
+
+// ---------------------------------------------------------------------------
+// 状态：机械与电控字段（接口预留）+ 视觉侧真实数据 + 运行状态
+// ---------------------------------------------------------------------------
+const state = {
+  board: null,
+  sim: false,
+  runtime: null,
+};
+
+// 电控字段（参考 Misaka app/board_adapter.py；当前无可信来源 → 全部待接入）
+const ELECTRIC_STATUS_IDS = ["mode", "stage", "motor_state", "target_id", "dart_number"];
+const ELECTRIC_PARAM_IDS = ["yaw_target", "yaw_actual", "charge_target", "charge_actual"];
+
+// 模拟数据（仅在"模拟数据预览"开启时显示，明确带 SIM 标识，不写入录制）
+const SIM_VALUES = {
+  target_id: "12（SIM）",
+  dart_number: "3（SIM）",
+  mode: "2（模拟）",
+  stage: "4（模拟）",
+  motor_state: "运行（模拟）",
+  yaw_target: "12.50 deg（SIM）",
+  yaw_actual: "11.80 deg（SIM）",
+  charge_target: "80（SIM）",
+  charge_actual: "76（SIM）",
+};
+
+function mechRow(label, valueHtml, valueClass) {
+  const row = document.createElement("div");
+  row.className = "mech-row";
+  const k = document.createElement("span");
+  k.className = "k";
+  k.textContent = label;
+  const v = document.createElement("span");
+  v.className = "v " + (valueClass || "waiting");
+  v.innerHTML = valueHtml;
+  row.appendChild(k);
+  row.appendChild(v);
+  return row;
+}
+
+function fieldById(id) {
+  const fields = (state.board && state.board.fields) || [];
+  return fields.find((f) => f.id === id) || null;
+}
+
+function fieldDisplay(field) {
+  if (!field) return { text: "待接入", cls: "waiting" };
+  if (state.sim && SIM_VALUES[field.id]) {
+    return { text: SIM_VALUES[field.id], cls: "simulated" };
+  }
+  if (field.state === "ok") return { text: field.display, cls: "ok" };
+  if (field.state === "partial") return { text: field.display, cls: "warn" };
+  if (field.state === "offline") return { text: field.display, cls: "err" };
+  return { text: "待接入", cls: "waiting" };
+}
+
+function renderBoard() {
+  const board = state.board;
+  if (!board) return;
+
+  // 状态字段
+  const statusHost = $("boardStatusFields");
+  statusHost.innerHTML = "";
+  for (const id of ELECTRIC_STATUS_IDS) {
+    const field = fieldById(id);
+    if (!field) continue;
+    const d = fieldDisplay(field);
+    statusHost.appendChild(mechRow(field.label, d.text, d.cls));
+  }
+
+  // 参数字段
+  const paramHost = $("boardParamFields");
+  paramHost.innerHTML = "";
+  for (const id of ELECTRIC_PARAM_IDS) {
+    const field = fieldById(id);
+    if (!field) continue;
+    const d = fieldDisplay(field);
+    paramHost.appendChild(mechRow(field.label, d.text, d.cls));
+  }
+
+  // 视觉侧关联（真实数据，只读）
+  const visualHost = $("visualInputFields");
+  visualHost.innerHTML = "";
+  for (const item of board.visual_inputs || []) {
+    const cls = item.state === "ok" ? "ok" : (item.state === "offline" ? "err" : "waiting");
+    visualHost.appendChild(mechRow(item.label, item.display, cls));
+  }
+
+  // 摘要行
+  const target = fieldById("target_id");
+  const dart = fieldById("dart_number");
+  const stage = fieldById("stage");
+  const comm = fieldById("comm_online");
+  $("sumTarget").textContent = state.sim ? SIM_VALUES.target_id : "待接入";
+  $("sumTarget").className = "sc-value " + (state.sim ? "warn" : "waiting");
+  $("sumDart").textContent = state.sim ? SIM_VALUES.dart_number : "待接入";
+  $("sumDart").className = "sc-value " + (state.sim ? "warn" : "waiting");
+  $("sumStage").textContent = state.sim ? SIM_VALUES.stage : "待接入";
+  $("sumStage").className = "sc-value " + (state.sim ? "warn" : "waiting");
+  if (comm && comm.state === "partial") {
+    $("sumComm").textContent = "视觉在线 · 电控未接入";
+    $("sumComm").className = "sc-value warn";
+  } else if (comm && comm.state === "offline") {
+    $("sumComm").textContent = "视觉链路离线";
+    $("sumComm").className = "sc-value warn";
+  } else {
+    $("sumComm").textContent = "视觉链路 --";
+    $("sumComm").className = "sc-value warn";
+  }
+
+  // 面板状态标记
+  $("boardStatusTag").textContent = "待接入";
+  $("boardStatusTag").className = "tag warn";
+  $("paramStatusTag").textContent = state.sim ? "SIM 预览" : "待接入";
+  $("paramStatusTag").className = "tag " + (state.sim ? "warn" : "warn");
+  $("boardChip").textContent = "电控遥测：待接入";
+  $("simBadge").hidden = !state.sim;
+
+  // 运行状态（真实）
+  const rt = board.runtime || {};
+  const runtimeHost = $("runtimeFields");
+  runtimeHost.innerHTML = "";
+  runtimeHost.appendChild(mechRow("录制状态", rt.recording ? "● 录制中" : "未录制", rt.recording ? "ok" : "waiting"));
+  runtimeHost.appendChild(mechRow("当前会话", rt.session || "--", rt.session ? "ok" : "waiting"));
+  runtimeHost.appendChild(mechRow("处理帧数", String(rt.frames_processed || 0), "ok"));
+  runtimeHost.appendChild(mechRow("遥测行数", String(rt.telemetry_rows || 0), "ok"));
+  runtimeHost.appendChild(mechRow("参数事件 / 人工记录",
+    `${rt.parameter_events || 0} / ${rt.manual_notes || 0}`, "ok"));
+  runtimeHost.appendChild(mechRow("视觉调试链路",
+    rt.link_connected ? `在线 · ${fmt(rt.link_recv_fps, 1)} fps` : "离线",
+    rt.link_connected ? "ok" : "err"));
+  $("noteTag").textContent = `${rt.manual_notes || 0} 条`;
+  const runtimeTag = $("runtimeTag");
+  if (runtimeTag) {
+    runtimeTag.textContent = rt.recording ? "● 录制中" : "未录制";
+    runtimeTag.className = "tag " + (rt.recording ? "ok" : "");
+  }
+
+  // 说明
+  const statusNote = $("boardStatusNote");
+  if (statusNote) statusNote.textContent = board.note || "";
+}
+
+async function refreshBoard() {
+  try {
+    const resp = await fetch("/api/board", { cache: "no-store" });
+    const data = await resp.json();
+    state.board = data;
+    renderBoard();
+    const link = (data.runtime && data.runtime.link_connected);
+    setChip("linkChip", link ? "视觉程序已连接" : "等待视觉程序…", link ? "ok" : "warn");
+  } catch (error) {
+    setChip("linkChip", "后端连接失败", "err");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 录制状态与控制（与视觉调试台同一链路）
+// ---------------------------------------------------------------------------
+const recState = { active: false };
+
+async function refreshRecorder() {
+  try {
+    const resp = await fetch("/api/recorder", { cache: "no-store" });
+    const data = await resp.json();
+    const btn = $("recordToggleBtn");
+    if (data.ok === false) {
+      setChip("recordChip", "录制：不可用", "warn");
+      if (btn && !btn.disabled) { btn.textContent = "录制不可用"; btn.disabled = true; }
+      return;
+    }
+    recState.active = !!data.recording;
+    setChip("recordChip", data.recording ? "● 录制中" : "录制：未录制", data.recording ? "ok" : "");
+    if (btn && !btn.disabled) {
+      btn.textContent = data.recording ? "停止录制" : "开始录制";
+      btn.className = "record-btn" + (data.recording ? " danger" : "");
+    }
+  } catch (error) {
+    setChip("recordChip", "录制：不可用", "warn");
+  }
+}
+
+async function toggleRecording() {
+  const btn = $("recordToggleBtn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = recState.active ? "正在停止…" : "正在开始…";
+  try {
+    await fetch("/api/recorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: recState.active ? "stop" : "start" }),
+    });
+  } catch (error) {
+    /* 状态刷新会反映失败 */
+  } finally {
+    btn.disabled = false;
+    await refreshRecorder();
+    await refreshBoard();
+  }
+}
+$("recordToggleBtn").addEventListener("click", toggleRecording);
+
+// ---------------------------------------------------------------------------
+// 模拟数据预览（仅界面演示，不写入录制）
+// ---------------------------------------------------------------------------
+$("simToggle").addEventListener("change", (event) => {
+  state.sim = event.target.checked;
+  renderBoard();
+});
+
+// ---------------------------------------------------------------------------
+// 电控遥测曲线：按用途选择（无数据时只显示"待接入"，不绘制模拟曲线）
+// ---------------------------------------------------------------------------
+const CHART_GROUPS = [
+  { id: "angle", label: "角度与位置", fields: ["yaw_target", "yaw_actual"] },
+  { id: "motion", label: "速度与运动状态", fields: ["yaw_speed", "motor_state"] },
+  { id: "charge", label: "蓄力相关参数", fields: ["charge_target", "charge_actual"] },
+  { id: "other", label: "其他遥测", fields: ["stage", "mode"] },
+];
+const chartState = { selected: new Set(["angle", "charge"]) };
+
+function renderChartGroups() {
+  const host = $("chartGroups");
+  host.innerHTML = "";
+  for (const group of CHART_GROUPS) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = chartState.selected.has(group.id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) chartState.selected.add(group.id);
+      else chartState.selected.delete(group.id);
+      updateChartSelection();
+    });
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(group.label));
+    host.appendChild(label);
+  }
+  updateChartSelection();
+}
+
+function updateChartSelection() {
+  const groups = CHART_GROUPS.filter((g) => chartState.selected.has(g.id));
+  const el = $("chartSelection");
+  if (!el) return;
+  if (!groups.length) {
+    el.textContent = "未选择分组";
+    return;
+  }
+  el.textContent = `已选择 ${groups.length} 项（${groups.map((g) => g.label).join(" · ")}）`;
+}
+renderChartGroups();
+
+// ---------------------------------------------------------------------------
+// 人工调试记录（录制期间写入 events.jsonl，来源 manual）
+// ---------------------------------------------------------------------------
+let noteMsgHold = 0;
+function setNoteMsg(text, cls, holdMs) {
+  const el = $("noteMsg");
+  el.textContent = text;
+  el.className = "note wrap" + (cls ? " " + cls : "");
+  noteMsgHold = holdMs ? Date.now() + holdMs : 0;
+}
+
+async function submitNote() {
+  const input = $("noteInput");
+  const note = input.value.trim();
+  if (!note) {
+    setNoteMsg("请输入调试记录内容", "warn", 4000);
+    input.focus();
+    return;
+  }
+  const btn = $("noteBtn");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/board/note", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    });
+    const data = await resp.json();
+    if (data.ok === false) {
+      setNoteMsg(`记录失败：${data.error || "未知错误"}`, "err", 6000);
+    } else {
+      input.value = "";
+      setNoteMsg(`已写入当前会话（人工记录 ${data.manual_notes || 0} 条）`, "ok", 6000);
+      await refreshBoard();
+    }
+  } catch (error) {
+    setNoteMsg("记录失败：无法连接后端", "err", 6000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("noteBtn").addEventListener("click", submitNote);
+$("noteInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") submitNote();
+});
+
+// ---------------------------------------------------------------------------
+// 右侧页签切换（状态 / 参数 / 运行 / 人工记录）
+// ---------------------------------------------------------------------------
+const mechTabState = { active: "status" };
+
+function switchMechTab(name) {
+  mechTabState.active = name;
+  const panes = {
+    status: "mechTabStatus",
+    params: "mechTabParams",
+    runtime: "mechTabRuntime",
+    notes: "mechTabNotes",
+  };
+  const buttons = {
+    status: "mechTabBtnStatus",
+    params: "mechTabBtnParams",
+    runtime: "mechTabBtnRuntime",
+    notes: "mechTabBtnNotes",
+  };
+  for (const key of Object.keys(panes)) {
+    const isActive = key === name;
+    $(panes[key]).hidden = !isActive;
+    $(buttons[key]).classList.toggle("active", isActive);
+    $(buttons[key]).setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+}
+$("mechTabBtnStatus").addEventListener("click", () => switchMechTab("status"));
+$("mechTabBtnParams").addEventListener("click", () => switchMechTab("params"));
+$("mechTabBtnRuntime").addEventListener("click", () => switchMechTab("runtime"));
+$("mechTabBtnNotes").addEventListener("click", () => switchMechTab("notes"));
+
+// ---------------------------------------------------------------------------
+// 启动
+// ---------------------------------------------------------------------------
+refreshBoard();
+refreshRecorder();
+setInterval(() => { if (!noteMsgHold || Date.now() > noteMsgHold) refreshBoard(); }, 2000);
+setInterval(refreshRecorder, 2000);
+</script>
+</body>
+</html>

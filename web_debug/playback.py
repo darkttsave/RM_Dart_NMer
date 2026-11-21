@@ -217,10 +217,12 @@ class ReplaySession:
                             continue
                         self.events.append({
                             "index": len(self.events),
+                            "type": str(item.get("type", "parameter_changed")),
                             "elapsed_ms": _to_float(item.get("elapsed_us"), 0.0) / 1000.0,
                             "frame_id": _to_int(item.get("frame_id"), 0),
                             "source": str(item.get("source", "")),
                             "parameter": str(item.get("parameter", "")),
+                            "note": str(item.get("note", "")),
                             "old_value": _to_float(item.get("old_value"), 0.0),
                             "new_value": _to_float(item.get("new_value"), 0.0),
                             "result": str(item.get("result", "")),

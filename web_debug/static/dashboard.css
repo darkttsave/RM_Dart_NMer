@@ -384,3 +384,103 @@ input.frame-input{width:120px; font-family:ui-monospace,SFMono-Regular,Menlo,Con
 .event-result.ok{color:var(--green);}
 .event-result.err{color:var(--red);}
 .events-empty{color:var(--dim); font-size:11px; padding:10px 4px; line-height:1.7;}
+
+/* ---------- M4：顶部工作台导航 ---------- */
+.workbench-nav{display:flex; align-items:center; gap:2px; margin-left:4px; padding:2px;
+  background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:8px; flex:0 0 auto;}
+.wb-link{padding:3px 10px; border-radius:6px; font-size:11.5px; color:var(--muted);
+  text-decoration:none; white-space:nowrap; letter-spacing:.3px;}
+.wb-link:hover{color:var(--text); background:rgba(88,166,255,.08);}
+.wb-link.active{color:var(--text); background:rgba(88,166,255,.16); border:1px solid rgba(88,166,255,.35);}
+.wb-link.disabled{opacity:.4; pointer-events:none;}
+
+/* ---------- M4：水平偏差标柱（视觉调试台） ---------- */
+.deviation-gauge{display:flex; flex-direction:column; gap:2px; margin-top:8px; padding:6px 8px 4px;
+  background:#0c1117; border:1px solid var(--border-soft); border-radius:var(--radius-xs);}
+.dev-head{display:flex; justify-content:space-between; align-items:baseline; font-size:11px; color:var(--muted);}
+.dev-value{font-weight:600; font-variant-numeric:tabular-nums;}
+.dev-value.positive{color:var(--orange);}
+.dev-value.negative{color:var(--blue);}
+.dev-value.aligned{color:var(--green);}
+.dev-value.invalid{color:var(--dim); font-weight:500;}
+.dev-canvas{display:block; width:100%; height:54px;}
+.dev-foot{display:flex; justify-content:space-between; gap:8px; font-size:10.5px; color:var(--dim);
+  font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden;}
+.dev-foot .dev-turn.ok{color:var(--green);}
+.dev-foot .dev-turn.left{color:var(--blue);}
+.dev-foot .dev-turn.right{color:var(--orange);}
+.dev-foot .dev-turn.invalid{color:var(--dim);}
+
+/* ---------- M4：机械与电控调试台 ---------- */
+/* 左：曲线主观测区；右：页签（状态 / 参数 / 运行 / 人工记录） */
+.mech-grid{display:grid; grid-template-columns:minmax(0,1fr) 470px;
+  grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:"summary summary" "charts side";
+  gap:10px; padding:10px; height:calc(100vh - 52px); min-height:0;}
+.mech-summary{grid-area:summary; display:flex; gap:8px; min-width:0;}
+.mech-charts{grid-area:charts; min-height:0; display:flex; flex-direction:column;}
+.mech-side{grid-area:side; min-height:0; display:flex; flex-direction:column;}
+.mech-charts .panel-body{flex:1 1 auto; display:flex; flex-direction:column; min-height:0;}
+/* 右侧页签：单个面板填满页签高度，内部滚动 */
+.mech-side .tab-pane > .panel{flex:1 1 auto; min-height:0; display:flex; flex-direction:column;}
+.mech-side .tab-pane > .panel > .panel-body{flex:1 1 auto; min-height:0; overflow:auto;}
+.mech-side .tab-pane > .panel > .panel-body::-webkit-scrollbar{width:8px;}
+.mech-side .tab-pane > .panel > .panel-body::-webkit-scrollbar-thumb{background:#233040; border-radius:4px;}
+
+.summary-card{flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:3px;
+  padding:7px 10px; background:var(--panel2); border:1px solid var(--border-soft); border-radius:var(--radius-sm);}
+.summary-card .sc-label{font-size:10.5px; color:var(--dim); letter-spacing:.5px;}
+.summary-card .sc-value{font-size:15px; font-weight:600; color:var(--muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums;}
+.summary-card .sc-value.waiting{color:var(--dim); font-size:13px; font-weight:500;}
+.summary-card .sc-value.ok{color:var(--green); font-size:13px; font-weight:600;}
+.summary-card .sc-value.warn{color:var(--yellow); font-size:13px;}
+
+.state-badge{padding:1px 6px; border-radius:4px; font-size:10px; border:1px solid var(--border);
+  color:var(--dim); white-space:nowrap; flex:0 0 auto;}
+.state-badge.ok{color:var(--green); border-color:rgba(63,185,80,.45); background:rgba(63,185,80,.08);}
+.state-badge.waiting{color:var(--dim); border-color:#2a3646;}
+.state-badge.partial{color:var(--yellow); border-color:rgba(210,153,34,.45);}
+.state-badge.simulated{color:var(--yellow); border-color:rgba(210,153,34,.5); background:rgba(210,153,34,.1);}
+.state-badge.offline{color:var(--red); border-color:rgba(248,81,73,.4);}
+.mech-row{display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:3px 0;
+  border-bottom:1px dashed rgba(31,41,55,.55);}
+.mech-row:last-child{border-bottom:0;}
+.mech-row .k{color:var(--muted); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.mech-row .v{font-size:12.5px; color:var(--text); text-align:right; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums;}
+.mech-row .v.waiting{color:var(--dim);}
+.mech-row .v.simulated{color:var(--yellow);}
+.mech-row .v.ok{color:var(--text);}
+.mech-sim-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px;
+  font-size:11px; color:var(--muted);}
+.mech-sim-row label{display:inline-flex; align-items:center; gap:5px; cursor:pointer;}
+.mech-sim-row input{accent-color:#d29922;}
+.legend-row{display:flex; gap:12px; flex-wrap:wrap; font-size:10.5px; color:var(--dim); padding:0 2px;}
+.legend-row .lg{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px;}
+.legend-row .lg.ok{background:#3fb950;}
+.legend-row .lg.sim{background:#d29922;}
+.legend-row .lg.manual{background:#bc8cff;}
+.legend-row .lg.waiting{background:#3a4656;}
+.note-input-row{display:flex; gap:6px; align-items:center;}
+.note-input-row input{flex:1 1 auto; min-width:0; padding:4px 8px; font-size:12px;}
+.mech-chart-groups{display:flex; flex-wrap:wrap; gap:5px 10px; padding:2px 0 6px;}
+.mech-chart-groups label{display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--muted); cursor:pointer;}
+.mech-chart-groups input{accent-color:#3fb950;}
+.mech-chart-body{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; gap:6px;
+  align-items:center; justify-content:center; color:var(--dim); font-size:11px; line-height:1.7;
+  border:1px dashed #243040; border-radius:var(--radius-xs); padding:10px; text-align:center;}
+.mech-chart-body b{color:var(--muted); font-weight:600; letter-spacing:.5px;}
+@media (max-width:1400px){
+  .mech-grid{grid-template-columns:minmax(0,1fr) 410px; gap:8px; padding:8px;}
+  .summary-card{padding:6px 8px;}
+}
+@media (max-width:1200px){
+  .mech-grid{grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr) minmax(0,1.2fr);
+    grid-template-areas:"summary" "charts" "side";}
+}
+
+/* 人工调试记录事件（M4）：备注文本跨列显示 */
+.event-item.manual{grid-template-columns:64px minmax(0,1fr) 46px 62px;}
+.event-item.manual .event-param small{display:block; margin:2px 0 0; white-space:normal;
+  line-height:1.45; color:var(--muted); font-size:10.5px;}

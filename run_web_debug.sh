@@ -143,7 +143,8 @@ if [ "$REPLAY" -eq 1 ]; then
     fi
     echo "[run_web_debug] 启动 M2 离线回放: http://$WEB_HOST:$REPLAY_PORT/ (会话: ${PLAYBACK_ARGS[*]})"
     exec python3 "$ROOT_DIR/web_debug/playback.py" \
-        --host "$WEB_HOST" --port "$REPLAY_PORT" "${PLAYBACK_ARGS[@]}"
+        --host "$WEB_HOST" --port "$REPLAY_PORT" \
+        --live-url "http://$WEB_HOST:$WEB_PORT/" "${PLAYBACK_ARGS[@]}"
 fi
 
 # ---- 0.2 无预览录制模式（--record-only）----
@@ -180,6 +181,7 @@ echo "[run_web_debug] 启动调试后端: http://$WEB_HOST:$WEB_PORT/ (数据口
 python3 "$ROOT_DIR/web_debug/app.py" \
     --host "$WEB_HOST" --port "$WEB_PORT" \
     --data-host "$DATA_HOST" --data-port "$DATA_PORT" \
+    --playback-url "http://$WEB_HOST:$REPLAY_PORT/" \
     > "$LOG_DIR/flask.log" 2>&1 &
 FLASK_PID=$!
 echo "$FLASK_PID" > "$LOG_DIR/flask.pid"

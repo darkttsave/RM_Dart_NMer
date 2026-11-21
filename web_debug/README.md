@@ -45,10 +45,12 @@
 └────────────────────────────────────┘  C++ 控制口  └──────────────────────────────────────────┘
 ```
 
-## 2. 界面结构（M2-UI 重构后 + M3 参数页签）
+## 2. 界面结构（M2-UI 重构后 + M3 参数页签 + M4 双调试台）
 
 ### 2.1 实时监测页（`/`：顶栏 / 左侧视频 / 右侧页签 / 底栏）
 
+- **顶部工作台导航（M4）**：`视觉调试 | 机械与电控 | 历史回放`；页面切换只换 Flask 页面，
+  不重启 C++ 主程序、不中断录像；
 - **顶栏**：调试链路状态、**录制状态 chip + 开始/停止录制按钮（常驻）**、FPS、识别耗时、本帧串口输出、数据来源、时钟；
   （默认启动不自动录制，点「开始录制」开始；启动即录制用 `--auto-record`）
 - **主区左侧**：实时视频（MJPEG），画面是页面主体，保留 LIVE / 分辨率 / 帧龄角标；
@@ -56,6 +58,9 @@
   - **状态面板**：引导灯识别（Tracking / 连续锁定 / 丢失计数 / 锁定进度 / 绿色像素 / 候选轮廓）、目标与偏差（**未检测到目标时坐标显示 `--`，不把算法占位值 (0,0) 当成测量结果**）、视觉输出与串口（turnFlag / distanceFlag / clearFlag / 本帧是否发送 / 实际发送值）、调试链路（接收帧率 / 帧龄 / 累计接收 / 数据来源）；
   - **实时曲线**：字段选择（8 个可选字段，默认 4 条）、时间窗口（5/10/30/60 s）、暂停 / 继续、清空；每条曲线**独立纵轴**，切换页签后自动重绘，图表高度随右侧可用高度自适应；
   - **参数调整（M3）**：按颜色识别 / 候选目标筛选 / 追踪与连续帧 / 转向与距离 / 相机分组，显示「运行值 / 配置文件值」，支持应用（热更新）与保存（写 YAML），详见 §3；
+- **水平偏差标柱（M4）**：位于「目标与偏差」面板内，显示 `offset_x` 相对图像中心的横向偏差
+  （中心 0 线、±400 px 量程、指针与数值、左右方向、`turn_threshold` 对准区间、当前 `turnFlag`）；
+  阈值取自 C++ 实际运行参数（参数调整后自动跟随）；未检测到有效目标时不显示指针、显示降级提示，详见 §4.3；
 - **底栏**：会话名、录制统计（video 帧 / 遥测行）、队列丢弃与写入错误（**有错误时常显，不折叠**）、调试链路摘要，以及 `录制详情` 折叠浮层（会话目录 / 帧数 / 丢弃 / 错误）。
 
 后端接口（M1 起不变）：
@@ -80,6 +85,19 @@
 - **视频定位始终使用 `video_index_001.csv` 的实际帧时间索引，不使用视频标称 FPS。**
 
 界面样式集中在 `web_debug/static/dashboard.css`（两个页面共用，保证录制/回放视觉一致）。
+
+### 2.3 机械与电控调试台（`/mechanical`，M4）
+
+- 顶部同一套工作台导航；无相机视频区域；
+- 摘要行：当前目标编号 / 当前飞镖编号 / 运行阶段（电控）→ **待接入**；通信在线 → 视觉链路真实状态 + 电控链路未接入说明；
+- **左侧（主要观测区）**：电控遥测曲线——顶部按用途分组可选（角度与位置 / 速度与运动状态 / 蓄力相关参数 / 其他遥测）；
+  电控遥测未接入时绘图区显示「待接入」，不绘制模拟曲线；
+- **右侧页签**（按键切换，同一时间只显示一个）：
+  - **状态**：电机状态、工作模式、运行阶段、目标/飞镖编号（待接入）+ 模拟数据预览开关（SIM 标识）；
+  - **参数**：Yaw 目标/实际、蓄力目标/实际（待接入）+ 视觉侧关联（只读真实数据）；
+  - **运行**：会话运行状态（录制/会话/帧数/遥测/事件与人工记录数/链路，真实数据）；
+  - **人工记录**：人工调试记录（录制期间写入当前会话 `events.jsonl`，类型 `manual_note`、来源 `manual`）；
+- 字段映射与真实/模拟/人工/待接入分类详见 §4。
 
 ## 3. M3：运行时参数管理与参数事件
 
@@ -161,9 +179,81 @@ GUI Trackbar：保留原有调参能力，但运行值只有 `RuntimeParams` 一
 曲线播放头同步跳转，历史曲线上以黄色虚线标记事件位置。旧 M2 会话没有 `events.jsonl` 时正常回放，
 显示「该会话无参数修改事件」。回放页只读，不会修改 C++ 实时运行参数。
 
-## 4. M2：数据录制
+## 4. M4：双调试台与偏差标柱
 
-### 4.1 录制内容与格式
+### 4.1 统一导航
+
+| 页面 | 路径 | 说明 |
+|---|---|---|
+| 视觉调试 | `/` | 实时视频、状态面板、实时曲线、参数调整（M1–M3 能力保持不变） |
+| 机械与电控 | `/mechanical` | 无视频区；电控字段映射（待接入）、视觉侧只读关联、人工调试记录 |
+| 历史回放 | 独立服务（默认 `:5001`） | 复用 M2/M3 的会话数据、参数事件与人工记录 |
+
+两个工作台由同一个 Flask 服务渲染（`app.py` 增加 `/mechanical` 路由），复用同一份运行状态数据，
+切换页面不重启 C++ 进程、不中断录制（实测跳转期间录像帧数持续增长）。
+
+### 4.2 电控字段映射表（接口预留）
+
+参考 Misaka `app/board_adapter.py` 的字段清单；**只有队内代码/协议/数据来源能证明的字段才标记为真实接入**。
+当前队内视觉程序通过 15 字节串口**单向发送**控制指令（`VirtualSerial` 仅发送），未接收电控遥测，
+因此下列字段均标记「待接入」，由 `/api/board` 统一定义与返回状态：
+
+| 字段 id | 界面标签 | 类型 | 数据来源约定 | 状态 |
+|---|---|---|---|---|
+| `target_id` | 当前目标编号 | int | 电控上报 | 待接入 |
+| `dart_number` | 当前飞镖编号 | int | 电控上报（视觉程序不产生镖体编号） | 待接入 |
+| `mode` | 电控工作模式 | enum | 电控上报 | 待接入 |
+| `stage` | 电控运行阶段 | enum | 电控上报 | 待接入 |
+| `yaw_target` | Yaw 目标值 | float(deg) | 电控上报 | 待接入 |
+| `yaw_actual` | Yaw 实际值 | float(deg) | 电控上报 | 待接入 |
+| `charge_target` | 蓄力目标值 | float | 电控上报 | 待接入 |
+| `charge_actual` | 蓄力实际值 | float | 电控上报 | 待接入 |
+| `motor_state` | 电机状态 | enum | 电控上报 | 待接入 |
+| `comm_online` | 通信在线状态 | status | 视觉调试链路真实状态 + 电控链路状态 | 部分真实 |
+
+视觉侧只读关联（真实，来源 C++ 视觉算法）：视觉检测有效、`offset_x`、`turnFlag`、`distanceFlag`、
+`clearFlag`、本帧串口发送、实际发送 T/D/C。
+
+分类约定：
+
+- **真实接入**：数据来自 C++ 运行状态或调试帧（视觉侧关联、通信在线、会话运行状态）；
+- **模拟数据**：机械页「模拟数据预览」开关仅为界面演示，字段带 `SIM` 标识、**不写入录制**、不冒充实测；
+- **人工记录**：机械/电控调试备注，写入会话 `events.jsonl`（`type=manual_note`, `source=manual`）；
+- **待接入**：协议未确认或无数据来源的字段，界面显示「待接入」，不生成模拟曲线。
+
+### 4.3 水平偏差标柱（视觉调试台）
+
+- 数据：当前 `offset_x`（C++ 调试帧）+ `turn_threshold`（`/api/params` 实际运行值）+ `turnFlag`；
+- 显示：中央 0 线 = 图像中心；量程 ±400 px（超出时指针贴边并标注真实值）；指针数值、方向（左偏/右偏/对准）、
+  绿色对准区间（`|offset_x| < turn_threshold`，按真实数值比例绘制，过窄时最小可见宽度）；
+- 未检测到有效目标：不绘制指针，显示「未检测到有效目标 · 不显示偏差」，数值显示 `--`；
+- 参数调整后：阈值位置与文本随实际运行值刷新（标柱每 3 s 读取一次 `/api/params`）；
+- 仅显示，不改变算法输出、转向判断逻辑或 15 字节协议。
+
+> Misaka 参考差异：Misaka 实际以「视觉偏差曲线」（`detector/yaw_diff_px`）展示偏差，并未实现竖线标柱组件；
+> 本轮按用户要求的"竖线标柱"视觉效果独立实现（横向刻度 + 竖线指针 + 阈值区间），未复制其代码。
+
+### 4.4 接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET /mechanical` | 机械与电控调试台页面（无视频区） |
+| `GET /api/board` | 字段映射状态（10 项电控字段）+ 视觉侧只读数据（9 项）+ 运行状态 |
+| `POST /api/board/note` | 人工调试记录：录制期间写入当前会话 `events.jsonl`（未录制时明确报错，不伪造成功） |
+| `GET /api/params` | 偏差标柱读取 `turn_threshold` 实际运行值（M3 接口） |
+
+人工记录事件结构（追加到会话 `events.jsonl`，与遥测同一时间基准）：
+
+```json
+{"type":"manual_note","elapsed_us":3013906,"frame_id":1003,"source":"manual","note":"Yaw 机构紧固后复测","result":"recorded"}
+```
+
+回放页「事件记录」页签同时展示参数修改事件（`parameter_changed`）与人工记录（`manual_note`）；
+人工记录以「人工记录」标签 + 备注文本显示，可点击跳转时间轴/视频帧/曲线播放头。
+
+## 5. M2：数据录制
+
+### 5.1 录制内容与格式
 
 | 文件 | 内容 | 说明 |
 |---|---|---|
@@ -174,7 +264,7 @@ GUI Trackbar：保留原有调参能力，但运行值只有 `RuntimeParams` 一
 | `config_snapshot/debug.yaml` | 本次磁盘配置快照 | 原样复制 |
 | `config_snapshot/runtime_params.json` | 运行时实际生效参数快照 | 来自主程序变量，与磁盘 YAML 可能不同 |
 
-### 4.2 遥测 CSV 字段（`telemetry_001.csv`）
+### 5.2 遥测 CSV 字段（`telemetry_001.csv`）
 
 ```
 frame_id,timestamp_us,elapsed_us,detected,tracking,target_x,target_y,radius,
@@ -191,7 +281,7 @@ green_pixels,candidate_count,fps,processing_time_ms
 - `turn_flag / distance_flag`：原有算法输出（`distanceFlag` 不是实际距离）；
 - 其他：`tracking`、锁定/丢失计数、绿色像素数、候选轮廓数、实测 fps、识别耗时。
 
-### 4.3 视频索引（`video_index_001.csv`）
+### 5.3 视频索引（`video_index_001.csv`）
 
 ```
 video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
@@ -201,13 +291,13 @@ video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
 - `source_frame_id` 与遥测 `frame_id` 一一对应，`source_elapsed_us` 与遥测 `elapsed_us` 同基准；
 - 回放**不依赖视频标称 FPS**，一律按 `source_elapsed_us` 定位。
 
-### 4.4 时间基准（重要）
+### 5.4 时间基准（重要）
 
 - 同一主机内使用 `steady_clock` 单调时钟；
 - 无工业相机硬件时间戳，帧时间戳来源为 **`detectGreenTarget()` 处理完成时刻**（session.json 中已注明）；
 - 跨机器回放只用 `elapsed_us`（相对会话开始），不依赖绝对单调时间。
 
-### 4.5 录制控制
+### 5.5 录制控制
 
 1. **启动参数**（不依赖 Flask）：
    - `--record` / `--no-record`：开关录制（覆盖配置）；
@@ -226,7 +316,7 @@ video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
    录制主体仍在 C++。状态显示包含视频帧数、遥测行数、丢弃与写入错误。
 4. 每次开始录制创建独立目录，**多次录制不覆盖**；程序正常退出（SIGINT/SIGTERM/ESC）时关闭文件并更新 `session.json` 为 `completed`。
 
-### 4.6 运行时行为
+### 5.6 运行时行为
 
 - 视觉线程：每帧格式化一行 CSV + 把 Mat 引用放入有界队列（微秒级），**不做磁盘 IO、不做视频缩放**；
 - 视频线程：缩放（`video_scale`）+ MJPG 编码 + 写 AVI，**成功写入才写索引**；
@@ -234,7 +324,7 @@ video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
 - 磁盘/编码错误：计数并写入 `errors`（不静默）；
 - 录制不依赖 Flask/浏览器：Flask 未启动、浏览器关闭、Flask 崩溃都不影响录制。
 
-## 5. M2：离线回放
+## 6. M2：离线回放
 
 独立 Flask 服务，只读会话目录，不连接相机、电控，不需要 C++ 主程序：
 
@@ -279,7 +369,7 @@ python3 web_debug/playback.py --root recordings --port 5001
 > 注意：`cv2.VideoCapture` 非线程安全，回放服务把所有 OpenCV 解码/编码固定在一个单线程执行器中，
 > 避免 Flask 多线程请求下的偶发解码失败（M2 联调时实际踩到并修复）。
 
-## 6. 启动方式
+## 7. 启动方式
 
 ```bash
 # 默认：实时预览（相机 + 串口）；录制由网页按钮手动开始（config: recording.auto_start=false）
@@ -324,7 +414,7 @@ python3 web_debug/playback.py --root recordings --port 5001
 | `--web-debug` / `--no-web-debug` | 实时预览开关（覆盖配置） |
 | `-h` / `--help` | 帮助 |
 
-## 7. 自检
+## 8. 自检
 
 ```bash
 # M1 实时链路（视觉程序 + Flask 都在运行）：期望 20/20
@@ -337,6 +427,9 @@ python3 test/test_recording_bench.py --seconds 20 --configs record_with_preview 
 # 离线降级（只启动 Flask）
 python3 test/test_web_debug_checks.py --offline
 
+# M4 双工作台与偏差标柱回归（需要 main + Flask + 回放服务运行中）
+NODE_PATH=$(npm root -g) node tools/regression_m4.js http://127.0.0.1:5000/ http://127.0.0.1:5001/ /tmp/m4ui
+
 # M3 参数管理自检（需要 main + Flask 运行中；保存测试请用隔离配置副本）
 python3 test/test_m3_params.py --config /tmp/m3test/config/debug.yaml --session /tmp/m3test/recordings/<会话>
 NODE_PATH=$(npm root -g) node tools/regression_m3.js http://127.0.0.1:5000/ http://127.0.0.1:5001/ /tmp/m3ui
@@ -347,7 +440,7 @@ NODE_PATH=$(npm root -g) node tools/screenshot_m2ui.js replay-charts http://127.
 NODE_PATH=$(npm root -g) node tools/regression_m2ui.js http://127.0.0.1:5000/ http://127.0.0.1:5001/
 ```
 
-## 8. 故障隔离行为（实测）
+## 9. 故障隔离行为（实测）
 
 | 场景 | 实时预览 | 本地录制 |
 |---|---|---|
@@ -356,7 +449,7 @@ NODE_PATH=$(npm root -g) node tools/regression_m2ui.js http://127.0.0.1:5000/ ht
 | 浏览器断开 | 生成器结束，无影响 | 正常录制 |
 | 视觉程序退出 | Flask 显示数据过期 | 文件正常关闭，session.json 更新 |
 
-## 9. 与 Misaka 调试工程的关系
+## 10. 与 Misaka 调试工程的关系
 
 - 参考 Misaka A1 的**界面信息结构**、A2/A3/A5 的**功能范围**，M2 的录制状态/控制与回放交互
   进一步参考了 Misaka 工作区**后续未提交改动**的显示逻辑（只读查看）；但前端/后端均为本项目
@@ -364,7 +457,7 @@ NODE_PATH=$(npm root -g) node tools/regression_m2ui.js http://127.0.0.1:5000/ ht
 - **未复制** Misaka 的代码（其依赖 UMT/pybind/嵌入式 Python，与本项目架构不兼容）；
 - Misaka 工程全程只读，未做任何修改。
 
-## 10. 后续扩展（M4+）
+## 11. 后续扩展（M5+）
 
 - 电控遥测：在 `telemetry_001.csv` 追加列 / 新增独立 CSV，录制层与回放层无需改协议；
 - 参数在线修改与事件记录（参考 Misaka A4）：新增 `events.csv` + 回放时间轴标记；

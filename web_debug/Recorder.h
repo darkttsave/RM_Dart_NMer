@@ -130,8 +130,12 @@ public:
     /// M3：参数修改生效时追加一条事件到 events.jsonl（未录制时忽略）
     void appendParameterEvent(const ParamChangeEvent &event);
 
+    /// M4：人工调试记录（机械/电控备注）追加到 events.jsonl；未录制时返回 false
+    bool appendManualNote(const std::string &note);
+
     bool enabled() const { return options_.enabled; }
     uint64_t parameterEvents() const { return parameter_events_.load(); }
+    uint64_t manualNotes() const { return manual_notes_.load(); }
     bool isRecording() const { return recording_.load(); }
     uint64_t framesProcessed() const { return frames_processed_.load(); }
     uint64_t telemetryRows() const { return telemetry_rows_.load(); }
@@ -220,6 +224,10 @@ private:
     std::atomic<uint64_t> write_errors_{0};
     std::atomic<uint64_t> video_index_rows_{0};
     std::atomic<uint64_t> parameter_events_{0};
+    std::atomic<uint64_t> manual_notes_{0};
+    // 最近一帧上下文（人工记录事件使用，与参数事件同一时间基准）
+    std::atomic<uint64_t> last_frame_id_{0};
+    std::atomic<int64_t> last_timestamp_us_{0};
 
     // 错误列表（受 errors_mutex_ 保护，与 session_mutex_ 分开避免锁嵌套）
     mutable std::mutex errors_mutex_;

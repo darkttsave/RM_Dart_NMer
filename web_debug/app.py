@@ -227,7 +227,7 @@ def recorder_command(cmd, control_port=DEFAULT_CONTROL_PORT):
     payload = {"cmd": cmd} if isinstance(cmd, str) else dict(cmd)
     try:
         with socket.create_connection(("127.0.0.1", int(control_port)), timeout=1.5) as sock:
-            sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            sock.sendall(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
             sock.settimeout(5.0)
             data = sock.recv(65536)
         if not data:
@@ -245,7 +245,15 @@ receiver: FrameReceiver = None  # 在 main 中创建
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html",
+                           playback_url=app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/"))
+
+
+@app.route("/mechanical")
+def mechanical():
+    """M4：机械与电控调试台（无视频区，复用同一 Flask 服务与运行状态数据）。"""
+    return render_template("mechanical.html",
+                           playback_url=app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/"))
 
 
 @app.route("/video_feed")
@@ -352,6 +360,155 @@ def api_params():
     return jsonify({"ok": False, "error": "cmd 必须是 apply / save"}), 400
 
 
+
+# --------------------------------------------------------------------------
+# M4：机械与电控调试台的数据接口（接口预留；只展示有可信来源的数据）
+# --------------------------------------------------------------------------
+# 电控候选字段：参考 Misaka app/board_adapter.py 的字段清单。
+# 当前队内视觉程序通过 15 字节串口单向发送控制指令（VirtualSerial 仅发送），
+# 未接收电控遥测，因此这些字段没有可信来源，统一显示「待接入」。
+BOARD_FIELDS = [
+    {"id": "target_id", "label": "当前目标编号", "kind": "int", "unit": "",
+     "hint": "需要电控上报或人工录入；当前无可信来源"},
+    {"id": "dart_number", "label": "当前飞镖编号", "kind": "int", "unit": "",
+     "hint": "需要电控上报；视觉程序不产生镖体编号"},
+    {"id": "mode", "label": "电控工作模式", "kind": "enum", "unit": "",
+     "hint": "电控协议未确认"},
+    {"id": "stage", "label": "电控运行阶段", "kind": "enum", "unit": "",
+     "hint": "电控协议未确认"},
+    {"id": "yaw_target", "label": "Yaw 目标值", "kind": "float", "unit": "deg",
+     "hint": "电控协议未确认"},
+    {"id": "yaw_actual", "label": "Yaw 实际值", "kind": "float", "unit": "deg",
+     "hint": "电控协议未确认"},
+    {"id": "charge_target", "label": "蓄力目标值", "kind": "float", "unit": "",
+     "hint": "电控协议未确认"},
+    {"id": "charge_actual", "label": "蓄力实际值", "kind": "float", "unit": "",
+     "hint": "电控协议未确认"},
+    {"id": "motor_state", "label": "电机状态", "kind": "enum", "unit": "",
+     "hint": "电控协议未确认"},
+    {"id": "comm_online", "label": "通信在线状态", "kind": "status", "unit": "",
+     "hint": "视觉→电控为单向发送；电控回传未接入"},
+]
+
+# 视觉侧真实数据（只读关联）：来自最新调试帧，用于机械调试时对照视觉输入
+VISUAL_INPUT_FIELDS = [
+    {"id": "detected", "label": "视觉检测有效", "kind": "bool", "unit": ""},
+    {"id": "offset_x", "label": "水平偏差 offset_x", "kind": "float", "unit": "px"},
+    {"id": "turn_flag", "label": "turnFlag（0/1/2）", "kind": "float", "unit": ""},
+    {"id": "distance_flag", "label": "distanceFlag（1/2/3）", "kind": "float", "unit": ""},
+    {"id": "clear_flag", "label": "clearFlag", "kind": "float", "unit": ""},
+    {"id": "tx_sent", "label": "本帧串口发送", "kind": "bool", "unit": ""},
+    {"id": "tx_turn_flag", "label": "实际发送 turnFlag", "kind": "float", "unit": ""},
+    {"id": "tx_distance_flag", "label": "实际发送 distanceFlag", "kind": "float", "unit": ""},
+    {"id": "tx_clear_flag", "label": "实际发送 clearFlag", "kind": "float", "unit": ""},
+]
+
+
+def _format_board_value(kind, value, unit=""):
+    if value is None:
+        return None
+    try:
+        if kind == "bool":
+            return "是" if bool(value) else "否"
+        if kind == "int":
+            return f"{int(round(float(value)))}{(' ' + unit) if unit else ''}"
+        if kind == "float":
+            return f"{float(value):.2f}{(' ' + unit) if unit else ''}"
+        return str(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_board_view():
+    """构建机械与电控调试台视图（字段状态 + 视觉侧真实数据 + 运行状态）。"""
+    frame, link = receiver.snapshot()
+    control_port = app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)
+    recorder = recorder_command("status", control_port)
+    recording = bool(recorder.get("recording")) if isinstance(recorder, dict) else False
+
+    fields = []
+    for spec in BOARD_FIELDS:
+        item = dict(spec)
+        item.update({"display": "待接入", "state": "waiting", "value": None})
+        if spec["id"] == "comm_online":
+            if not link.get("listening"):
+                item.update({"display": "调试数据口监听失败", "state": "offline"})
+            elif link.get("connected") and not link.get("stale"):
+                item.update({
+                    "display": "视觉链路在线 · 电控链路未接入（只发不收）",
+                    "state": "partial",
+                })
+            else:
+                item.update({"display": "视觉程序未连接", "state": "offline"})
+        fields.append(item)
+
+    visual_inputs = []
+    tx = (frame or {}).get("tx") or {}
+    visual_values = {
+        "detected": (frame or {}).get("detected"),
+        "offset_x": (frame or {}).get("offset_x"),
+        "turn_flag": (frame or {}).get("turn_flag"),
+        "distance_flag": (frame or {}).get("distance_flag"),
+        "clear_flag": (frame or {}).get("clear_flag"),
+        "tx_sent": tx.get("sent"),
+        "tx_turn_flag": tx.get("turn_flag"),
+        "tx_distance_flag": tx.get("distance_flag"),
+        "tx_clear_flag": tx.get("clear_flag"),
+    }
+    for spec in VISUAL_INPUT_FIELDS:
+        item = dict(spec)
+        value = visual_values.get(spec["id"])
+        if not frame:
+            item.update({"display": "视觉程序未连接", "state": "offline", "value": None})
+        elif value is None:
+            item.update({"display": "无数据", "state": "waiting", "value": None})
+        else:
+            item.update({"display": _format_board_value(spec["kind"], value, spec["unit"]),
+                         "state": "ok", "value": value})
+        visual_inputs.append(item)
+
+    return {
+        "ok": True,
+        "status": "waiting",
+        "status_label": "待接入",
+        "mode": "real",
+        "note": ("电控协议未确认：视觉程序通过 15 字节串口单向发送控制指令（只发不收），"
+                 "未接收电控遥测；标有「待接入」的字段暂无实际数据。"),
+        "fields": fields,
+        "visual_inputs": visual_inputs,
+        "runtime": {
+            "recording": recording,
+            "session": recorder.get("session", "") if isinstance(recorder, dict) else "",
+            "frames_processed": recorder.get("frames_processed", 0) if isinstance(recorder, dict) else 0,
+            "telemetry_rows": recorder.get("telemetry_rows", 0) if isinstance(recorder, dict) else 0,
+            "parameter_events": recorder.get("parameter_events", 0) if isinstance(recorder, dict) else 0,
+            "manual_notes": recorder.get("manual_notes", 0) if isinstance(recorder, dict) else 0,
+            "link_connected": bool(link.get("connected") and not link.get("stale")),
+            "link_recv_fps": link.get("recv_fps", 0.0),
+            "link_total_frames": link.get("total_frames", 0),
+        },
+    }
+
+
+@app.route("/api/board", methods=["GET"])
+def api_board():
+    """机械与电控调试台数据：字段映射状态 + 视觉侧只读数据 + 运行状态。"""
+    return jsonify(build_board_view())
+
+
+@app.route("/api/board/note", methods=["POST"])
+def api_board_note():
+    """人工调试记录（机械/电控备注）：录制期间写入当前会话 events.jsonl。"""
+    payload = request.get_json(silent=True) or {}
+    note = str(payload.get("note", "")).strip()
+    if not note:
+        return jsonify({"ok": False, "error": "note 不能为空"}), 400
+    if len(note) > 500:
+        note = note[:500]
+    control_port = app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)
+    return jsonify(recorder_command({"cmd": "manual_note", "note": note}, control_port))
+
+
 @app.route("/api/meta")
 def api_meta():
     """接口与字段说明（含 M2 预留接口位置）。"""
@@ -390,6 +547,10 @@ def _service_info():
             "params": "/api/params (GET 运行参数/配置值 / POST apply|save)",
             "events": "录制会话 events.jsonl（参数修改事件，回放页签展示）",
         },
+        "m4": {
+            "mechanical": "/mechanical 机械与电控调试台（无视频区）",
+            "board": "/api/board (GET 电控字段映射状态) / POST /api/board/note (人工记录)",
+        },
         # M3+ 预留：电控遥测、参数管理
         "reserved": {
             "board_telemetry": "/api/board/telemetry (预留)",
@@ -415,9 +576,12 @@ def main():
     parser.add_argument("--data-port", type=int, default=5010, help="接收 C++ 调试帧的端口（默认 5010）")
     parser.add_argument("--control-port", type=int, default=DEFAULT_CONTROL_PORT,
                         help="C++ 录制控制口（默认 5011；0=禁用 /api/recorder）")
+    parser.add_argument("--playback-url", default="http://127.0.0.1:5001/",
+                        help="顶部导航「历史回放」链接（默认 http://127.0.0.1:5001/）")
     args = parser.parse_args()
 
     app.config["RECORDER_CONTROL_PORT"] = args.control_port
+    app.config["PLAYBACK_URL"] = args.playback_url
     create_receiver(args.data_host, args.data_port)
     print(f"[backend] Web 调试界面: http://{args.host}:{args.port}/", flush=True)
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)

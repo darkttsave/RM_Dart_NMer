@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DART 视觉调试台 · 历史回放</title>
 <!-- M2-UI：回放界面重构（顶栏会话选择 / 左侧视频 / 右侧多页签 / 底部播放控制与统一时间轴） -->
-<link rel="stylesheet" href="/static/dashboard.css?v=m2ui">
+<link rel="stylesheet" href="/static/dashboard.css?v=m4b">
 <style>
 /* 回放页少量覆盖样式（通用样式见 /static/dashboard.css） */
 .transport-row{flex-wrap:wrap; row-gap:4px;}
@@ -37,7 +37,8 @@
     <span class="chip hide-md" id="durationChip">时长 --</span>
     <div class="spacer"></div>
     <span class="chip" id="missingChip">视频缺失 --</span>
-    <a class="link" id="liveLink" href="{{ live_url }}" target="_blank" rel="noopener" {% if not live_url %}hidden{% endif %}>返回实时调试台</a>
+    <a class="link" id="liveLink" href="{{ live_url }}" target="_blank" rel="noopener" {% if not live_url %}hidden{% endif %}>视觉调试</a>
+    <a class="link" id="mechLink" href="#" target="_blank" rel="noopener" hidden>机械与电控</a>
     <span id="clock" class="mono">--:--:--</span>
   </header>
 
@@ -79,7 +80,7 @@
         <button class="side-tab" id="tabBtnSession" type="button"
                 role="tab" aria-selected="false" aria-controls="tabSession">会话信息</button>
         <button class="side-tab" id="tabBtnEvents" type="button"
-                role="tab" aria-selected="false" aria-controls="tabEvents">参数事件</button>
+                role="tab" aria-selected="false" aria-controls="tabEvents">事件记录</button>
       </nav>
       <div class="tab-panels">
 
@@ -245,7 +246,7 @@
         <div class="tab-pane" id="tabEvents" role="tabpanel" aria-labelledby="tabBtnEvents" hidden>
           <div class="param-toolbar">
             <div class="group">
-              <span class="label">参数修改事件</span>
+              <span class="label">参数修改 / 人工记录</span>
               <span class="meta" id="eventMeta">--</span>
             </div>
             <div class="group" style="margin-left:auto;">
@@ -256,7 +257,8 @@
             <div class="events-empty">加载会话后显示参数事件</div>
           </div>
           <div class="note" id="eventNote" style="margin-top:0; border-top:0; padding-top:0;">
-            事件只读：回放页面不会修改 C++ 实时运行参数。旧版 M2 会话没有 events.jsonl 时显示为空。
+            事件只读：回放页面不会修改 C++ 实时运行参数。参数修改（parameter_changed）与人工调试记录
+            （manual_note）来自同一会话时间轴；旧版 M2 会话没有 events.jsonl 时显示为空。
           </div>
         </div>
 
@@ -811,17 +813,28 @@ const PARAM_LABELS = {
 
 const PARAM_SOURCE_LABELS = { web: "网页", trackbar: "滑条" };
 
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
 function renderEvents() {
   const list = $("eventList");
   const meta = $("eventMeta");
   const events = state.events || [];
-  if (meta) meta.textContent = `${events.length} 条`;
+  if (meta) {
+    const manualCount = events.filter((e) => e.type === "manual_note").length;
+    meta.textContent = manualCount > 0
+      ? `${events.length} 条（参数 ${events.length - manualCount} · 人工 ${manualCount}）`
+      : `${events.length} 条`;
+  }
   if (!list) return;
   if (!events.length) {
     const legacy = state.summary && !state.summary.events_available;
     list.innerHTML = legacy
-      ? '<div class="events-empty">该会话无参数修改事件（旧版 M2 会话没有 events.jsonl，回放其余功能不受影响）</div>'
-      : '<div class="events-empty">该会话无参数修改事件（录制期间未修改参数）</div>';
+      ? '<div class="events-empty">该会话无事件记录（旧版 M2 会话没有 events.jsonl，回放其余功能不受影响）</div>'
+      : '<div class="events-empty">该会话无事件记录（录制期间未修改参数、未添加人工记录）</div>';
     return;
   }
   list.innerHTML = "";
@@ -830,15 +843,25 @@ function renderEvents() {
     btn.type = "button";
     btn.className = "event-item";
     btn.dataset.index = String(ev.index);
-    btn.title = `${ev.parameter}：${ev.old_value} → ${ev.new_value}（${ev.result}）`;
-    const label = PARAM_LABELS[ev.parameter] || ev.parameter;
-    const source = PARAM_SOURCE_LABELS[ev.source] || ev.source || "--";
-    btn.innerHTML =
-      `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
-      `<span class="event-param"><b>${label}</b><small>${ev.parameter}</small></span>` +
-      `<span class="event-change">${ev.old_value} → ${ev.new_value}</span>` +
-      `<span class="event-source">${source}</span>` +
-      `<span class="event-result ${ev.result === "applied" ? "ok" : "err"}">${ev.result}</span>`;
+    if (ev.type === "manual_note") {
+      btn.className = "event-item manual";
+      btn.title = `人工调试记录（frame ${ev.frame_id}）：${ev.note}`;
+      btn.innerHTML =
+        `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
+        `<span class="event-param"><b>人工记录</b><small>${esc(ev.note)}</small></span>` +
+        `<span class="event-source">人工</span>` +
+        `<span class="event-result ok">${esc(ev.result || "recorded")}</span>`;
+    } else {
+      const label = PARAM_LABELS[ev.parameter] || ev.parameter;
+      const source = PARAM_SOURCE_LABELS[ev.source] || ev.source || "--";
+      btn.title = `${ev.parameter}：${ev.old_value} → ${ev.new_value}（${ev.result}）`;
+      btn.innerHTML =
+        `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
+        `<span class="event-param"><b>${esc(label)}</b><small>${esc(ev.parameter)}</small></span>` +
+        `<span class="event-change">${esc(ev.old_value)} → ${esc(ev.new_value)}</span>` +
+        `<span class="event-source">${esc(source)}</span>` +
+        `<span class="event-result ${ev.result === "applied" ? "ok" : "err"}">${esc(ev.result)}</span>`;
+    }
     btn.addEventListener("click", () => jumpToEvent(ev));
     list.appendChild(btn);
   }
@@ -1125,6 +1148,17 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 // 启动
 // ---------------------------------------------------------------------------
+// M4：由 --live-url 推导机械与电控调试台地址（未提供时保持隐藏）
+(() => {
+  const liveUrl = {{ (live_url or "") | tojson }};
+  const base = String(liveUrl || "").replace(/\/$/, "");
+  const mechLink = document.getElementById("mechLink");
+  if (base && mechLink) {
+    mechLink.href = base + "/mechanical";
+    mechLink.hidden = false;
+  }
+})();
+
 init();
 </script>
 </body>

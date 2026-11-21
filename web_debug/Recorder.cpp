@@ -369,6 +369,7 @@ bool Recorder::startSession(const std::string &reason)
         telemetry_dropped_.store(0);
         write_errors_.store(0);
         video_index_rows_.store(0);
+        manual_notes_.store(0);
         {
             std::lock_guard<std::mutex> elock(errors_mutex_);
             errors_.clear();
@@ -514,6 +515,9 @@ void Recorder::stopSession(const std::string &reason)
 
 void Recorder::submitFrame(const RecordFrame &frame)
 {
+    // M4：记录最近一帧上下文，供人工调试记录事件（manual_note）计算会话时间
+    last_frame_id_.store(frame.frame_id);
+    last_timestamp_us_.store(frame.timestamp_us);
     if (!recording_.load())
         return;
 
@@ -834,7 +838,8 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     oss << "    \"video_frames_dropped\": " << video_dropped_.load() << ",\n";
     oss << "    \"telemetry_rows_dropped\": " << telemetry_dropped_.load() << ",\n";
     oss << "    \"write_errors\": " << write_errors_.load() << ",\n";
-    oss << "    \"parameter_events\": " << parameter_events_.load() << "\n";
+    oss << "    \"parameter_events\": " << parameter_events_.load() << ",\n";
+    oss << "    \"manual_notes\": " << manual_notes_.load() << "\n";
     oss << "  },\n";
     oss << "  \"video\": {\n";
     oss << "    \"file\": \"debug_001.avi\",\n";
@@ -939,6 +944,41 @@ void Recorder::appendParameterEvent(const ParamChangeEvent &event)
     parameter_events_.fetch_add(1);
 }
 
+bool Recorder::appendManualNote(const std::string &note)
+{
+    if (!recording_.load())
+        return false;
+
+    const std::string trimmed = note.substr(0, 500); // 事件内单行备注，限制长度
+    int64_t session_start_us = 0;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        if (session_start_us_ <= 0)
+            return false;
+        session_start_us = session_start_us_;
+    }
+    const int64_t now_us = last_timestamp_us_.load() > 0 ? last_timestamp_us_.load() : session_start_us;
+    const int64_t elapsed_us = now_us > session_start_us ? now_us - session_start_us : 0;
+
+    std::ostringstream oss;
+    oss << "{";
+    oss << "\"type\":\"manual_note\",";
+    oss << "\"elapsed_us\":" << elapsed_us << ",";
+    oss << "\"frame_id\":" << last_frame_id_.load() << ",";
+    oss << "\"source\":\"manual\",";
+    oss << "\"note\":" << jsonQuoted(trimmed) << ",";
+    oss << "\"result\":\"recorded\"";
+    oss << "}";
+
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (!events_file_.is_open())
+        return false;
+    events_file_ << oss.str() << "\n";
+    events_file_.flush();
+    manual_notes_.fetch_add(1);
+    return true;
+}
+
 std::string Recorder::statusJson() const
 {
     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -957,6 +997,7 @@ std::string Recorder::statusJson() const
     oss << "\"telemetry_dropped\":" << telemetry_dropped_.load() << ',';
     oss << "\"write_errors\":" << write_errors_.load() << ',';
     oss << "\"parameter_events\":" << parameter_events_.load() << ',';
+    oss << "\"manual_notes\":" << manual_notes_.load() << ',';
     oss << "\"video_width\":" << video_width_ << ',';
     oss << "\"video_height\":" << video_height_;
     oss << "}";
@@ -1062,6 +1103,27 @@ void Recorder::controlLoop()
                     {
                         response = "{\"ok\":false,\"error\":" + jsonQuoted(error) + "}";
                     }
+                }
+            }
+            else if (cmd == "manual_note")
+            {
+                const std::string note = extractJsonString(request, "note");
+                if (note.empty())
+                {
+                    response = "{\"ok\":false,\"error\":\"note 不能为空\"}";
+                }
+                else if (!recording_.load())
+                {
+                    response = "{\"ok\":false,\"error\":\"当前未录制，人工记录未写入会话\"}";
+                }
+                else if (appendManualNote(note))
+                {
+                    response = "{\"ok\":true,\"recorded\":true,\"manual_notes\":" +
+                               std::to_string(manual_notes_.load()) + "}";
+                }
+                else
+                {
+                    response = "{\"ok\":false,\"error\":\"events.jsonl 未就绪\"}";
                 }
             }
             else if (cmd == "params.save")

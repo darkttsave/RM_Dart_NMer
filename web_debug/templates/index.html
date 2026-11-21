@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DART 视觉调试台 · 实时监测</title>
 <!-- M2-UI：实时监测界面重构（顶栏 / 左侧视频 / 右侧页签 / 底栏） -->
-<link rel="stylesheet" href="/static/dashboard.css?v=m2ui">
+<link rel="stylesheet" href="/static/dashboard.css?v=m4b">
 <style>
 /* 实时页少量覆盖样式（通用样式见 /static/dashboard.css） */
 .record-btn{
@@ -27,6 +27,11 @@
   <!-- ==================== 顶部状态栏 ==================== -->
   <header class="topbar">
     <div class="brand"><b>DART</b><span>视觉调试台 · 实时监测</span></div>
+    <nav class="workbench-nav" aria-label="工作台切换">
+      <a class="wb-link active" href="/">视觉调试</a>
+      <a class="wb-link" href="/mechanical">机械与电控</a>
+      <a class="wb-link" href="{{ playback_url }}" target="_blank" rel="noopener">历史回放</a>
+    </nav>
     <span class="chip" id="linkChip" title="Flask 与 C++ 视觉程序之间的 TCP 调试帧链路状态">
       <i class="dot"></i><span id="linkText">等待视觉程序…</span>
     </span>
@@ -126,6 +131,18 @@
                 <div class="kv"><span class="k">图像尺寸</span><span class="v muted" id="vImageSize">--</span></div>
               </div>
               <div class="note" id="measureNote">未检测到目标时不显示无效坐标</div>
+              <div class="deviation-gauge" id="devGauge">
+                <div class="dev-head">
+                  <span>水平偏差标柱 offset_x</span>
+                  <span class="dev-value" id="devValue">--</span>
+                </div>
+                <canvas class="dev-canvas" id="devCanvas"></canvas>
+                <div class="dev-foot">
+                  <span id="devThreshold">阈值 ±-- px</span>
+                  <span class="dev-turn" id="devTurn">turnFlag --</span>
+                  <span id="devRange">量程 ±400 px</span>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -338,6 +355,186 @@ function switchTab(name) {
 $("tabBtnStatus").addEventListener("click", () => switchTab("status"));
 $("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
 $("tabBtnParams").addEventListener("click", () => switchTab("params"));
+
+// ---------------------------------------------------------------------------
+// M4：水平偏差标柱（使用 C++ 实际数据；阈值取 /api/params 的实际运行值）
+//   - 中心 0 线 = 图像中心；左右为偏差方向；
+//   - 绿色区间为 |offset_x| < turn_threshold（对准判定范围，按真实数值比例绘制）；
+//   - 未检测到有效目标时不绘制指针，显示"不显示偏差"；
+//   - 仅显示，不改变算法输出与转向判断逻辑。
+// ---------------------------------------------------------------------------
+const devGauge = {
+  canvas: null,
+  ctx: null,
+  range: 400,        // 横向量程（px）：±400，超出时指针贴边并标注真实值
+  threshold: 4.0,    // turn_threshold 实际运行值（/api/params）
+  offset: null,
+  turnFlag: null,
+  detected: false,
+};
+
+function initDevGauge() {
+  devGauge.canvas = $("devCanvas");
+  if (devGauge.canvas) devGauge.ctx = devGauge.canvas.getContext("2d");
+}
+initDevGauge();
+
+async function refreshGaugeThreshold() {
+  try {
+    const resp = await fetch("/api/params", { cache: "no-store" });
+    const data = await resp.json();
+    if (data.ok !== false && data.running && typeof data.running.turn_threshold === "number") {
+      devGauge.threshold = Number(data.running.turn_threshold);
+      $("devThreshold").textContent = `阈值 ±${devGauge.threshold.toFixed(1)} px`;
+      drawDevGauge();
+    }
+  } catch (error) {
+    // 参数服务不可用：保留上次阈值，标柱仍按 offset_x 工作
+  }
+}
+refreshGaugeThreshold();
+setInterval(refreshGaugeThreshold, 3000);
+
+function drawDevGauge() {
+  const canvas = devGauge.canvas;
+  if (!canvas || !devGauge.ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.floor(rect.width);
+  const h = Math.floor(rect.height);
+  if (w < 30 || h < 20) return;
+  if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+  }
+  const ctx = devGauge.ctx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const padX = 10;
+  const padTop = 14;
+  const padBot = 14;
+  const plotW = w - padX * 2;
+  const midX = padX + plotW / 2;
+  const yTop = padTop;
+  const yBot = h - padBot;
+  const yMid = (yTop + yBot) / 2;
+  const range = devGauge.range;
+  const xOf = (v) => padX + plotW * (0.5 + Math.max(-1, Math.min(1, v / range)) / 2);
+
+  // 基线
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padX, yMid);
+  ctx.lineTo(w - padX, yMid);
+  ctx.stroke();
+
+  // 刻度：±400 / ±200 / 0
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const ticks = [-400, -200, 0, 200, 400];
+  for (const tick of ticks) {
+    const x = xOf(tick);
+    ctx.strokeStyle = tick === 0 ? "rgba(230,237,243,0.5)" : "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.moveTo(x, yTop);
+    ctx.lineTo(x, yBot);
+    ctx.stroke();
+    ctx.fillStyle = tick === 0 ? "rgba(230,237,243,0.65)" : "rgba(139,148,158,0.6)";
+    ctx.fillText(String(tick), x, h - 3);
+  }
+
+  // 对准区间 ±turn_threshold（真实比例；过窄时按最小可见半宽 4px 绘制）
+  {
+    const halfRaw = (xOf(devGauge.threshold) - xOf(0));
+    const half = Math.max(halfRaw, 4);
+    ctx.fillStyle = "rgba(63,185,80,0.16)";
+    ctx.fillRect(midX - half, yTop, half * 2, yBot - yTop);
+    ctx.strokeStyle = "rgba(63,185,80,0.55)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(midX - half, yTop);
+    ctx.lineTo(midX - half, yBot);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(midX + half, yTop);
+    ctx.lineTo(midX + half, yBot);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (!devGauge.detected || devGauge.offset === null) {
+    ctx.fillStyle = "rgba(139,148,158,0.8)";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("未检测到有效目标 · 不显示偏差", midX, yMid - 8);
+    ctx.fillStyle = "rgba(110,118,129,0.6)";
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.fillText("中心 0 = 图像中心", midX, yMid + 8);
+    return;
+  }
+
+  const offset = devGauge.offset;
+  const aligned = Math.abs(offset) < devGauge.threshold;
+  const color = aligned ? "#3fb950" : (offset > 0 ? "#ff8a4c" : "#58a6ff");
+  const px = xOf(offset);
+
+  // 指针（竖线 + 顶部三角）
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(px, yTop - 2);
+  ctx.lineTo(px, yBot + 2);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(px, yTop - 2);
+  ctx.lineTo(px - 4.5, yTop - 9);
+  ctx.lineTo(px + 4.5, yTop - 9);
+  ctx.closePath();
+  ctx.fill();
+
+  // 指针数值（画在指针上方，避开刻度）
+  ctx.fillStyle = color;
+  ctx.font = "9.5px ui-monospace, monospace";
+  ctx.textAlign = offset >= 0 ? "left" : "right";
+  ctx.textBaseline = "alphabetic";
+  const labelX = offset >= 0 ? px + 5 : px - 5;
+  ctx.fillText(`${offset > 0 ? "+" : ""}${offset.toFixed(1)}`, labelX, yTop + 8);
+}
+
+function updateDevGauge(frame) {
+  const detected = !!frame.detected;
+  const offset = detected && Number.isFinite(Number(frame.offset_x)) ? Number(frame.offset_x) : null;
+  devGauge.detected = detected;
+  devGauge.offset = offset;
+  devGauge.turnFlag = frame.turn_flag;
+
+  const valueEl = $("devValue");
+  const turnEl = $("devTurn");
+  const thrEl = $("devThreshold");
+  if (thrEl) thrEl.textContent = `阈值 ±${devGauge.threshold.toFixed(1)} px`;
+
+  if (!detected || offset === null) {
+    valueEl.textContent = "--";
+    valueEl.className = "dev-value invalid";
+    turnEl.textContent = "turnFlag --";
+    turnEl.className = "dev-turn invalid";
+  } else {
+    const aligned = Math.abs(offset) < devGauge.threshold;
+    const direction = aligned ? "对准" : (offset > 0 ? "右偏" : "左偏");
+    const over = Math.abs(offset) > devGauge.range ? " · 超出量程" : "";
+    valueEl.textContent = `${offset > 0 ? "+" : ""}${offset.toFixed(1)} px · ${direction}${over}`;
+    valueEl.className = "dev-value " + (aligned ? "aligned" : (offset > 0 ? "positive" : "negative"));
+    const t = turnText(frame.turn_flag);
+    turnEl.textContent = `turnFlag ${t.text}`;
+    turnEl.className = "dev-turn " + (aligned ? "ok" : (offset > 0 ? "right" : "left"));
+  }
+  drawDevGauge();
+}
 
 // ---------------------------------------------------------------------------
 // 实时曲线：字段定义（每个字段独立纵轴，避免不同量纲混用）
@@ -634,6 +831,8 @@ function renderFrame(f) {
   setText("vOffsetY", detected ? fmt(f.offset_y, 1) : "--", detected ? "" : "muted");
   setText("vImageCenter", `${fmt(f.image_center_x, 0)}, ${fmt(f.image_center_y, 0)}`, "muted");
   setText("vImageSize", `${f.image_width || "--"} × ${f.image_height || "--"}`, "muted");
+  updateDevGauge(f);
+
   const measureTag = $("measureTag");
   measureTag.textContent = detected ? "有效测量" : "无有效目标";
   measureTag.className = "tag " + (detected ? "ok" : "warn");
