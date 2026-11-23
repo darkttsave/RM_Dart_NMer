@@ -72,6 +72,20 @@
           </small>
         </div>
       </div>
+      <div class="video-deviation-bar">
+        <div class="deviation-gauge video-deviation" id="devGauge" aria-label="水平偏差标尺">
+          <div class="dev-head">
+            <span>水平偏差 offset_x</span>
+            <span class="dev-value" id="devValue">--</span>
+          </div>
+          <canvas class="dev-canvas" id="devCanvas"></canvas>
+          <div class="dev-foot">
+            <span id="devThreshold">阈值 ±-- px</span>
+            <span class="dev-turn" id="devTurn">turnFlag --</span>
+            <span id="devRange">量程 ±400 px</span>
+          </div>
+        </div>
+      </div>
       <div class="video-foot">
         <span class="mono" id="footSeq">seq --</span>
         <span id="footTarget" class="hide-sm">TARGET --</span>
@@ -135,18 +149,7 @@
                 <div class="kv"><span class="k">图像尺寸</span><span class="v muted" id="vImageSize">--</span></div>
               </div>
               <div class="note" id="measureNote">未检测到目标时不显示无效坐标</div>
-              <div class="deviation-gauge" id="devGauge">
-                <div class="dev-head">
-                  <span>水平偏差标柱 offset_x</span>
-                  <span class="dev-value" id="devValue">--</span>
-                </div>
-                <canvas class="dev-canvas" id="devCanvas"></canvas>
-                <div class="dev-foot">
-                  <span id="devThreshold">阈值 ±-- px</span>
-                  <span class="dev-turn" id="devTurn">turnFlag --</span>
-                  <span id="devRange">量程 ±400 px</span>
-                </div>
-              </div>
+
             </div>
           </section>
 
@@ -900,6 +903,7 @@ function updateReceiver(r) {
 
   const showPlaceholder = !connected || stale;
   $("videoPlaceholder").hidden = !showPlaceholder;
+  if (showPlaceholder) updateDevGauge({ detected: false });
   $("liveBadge").classList.toggle("live", connected && !stale);
   $("liveBadge").textContent = connected && !stale
     ? `● LIVE · ${state.latest ? (state.latest.source || "debug") : "debug"}`
