@@ -210,6 +210,10 @@ void Recorder::start()
         return;
     }
 
+    // 自动会话先完成初始化，避免控制线程同时启动第二个会话。
+    if (options_.auto_start)
+        startSession("auto_start");
+
     if (options_.control_port > 0)
     {
         control_running_.store(true);
@@ -217,9 +221,6 @@ void Recorder::start()
         std::cout << "[Recorder] 本机录制控制口: tcp://127.0.0.1:" << options_.control_port
                   << " (status/start/stop/params/params.apply/params.save)" << std::endl;
     }
-
-    if (options_.auto_start)
-        startSession("auto_start");
 }
 
 void Recorder::stop()
@@ -332,7 +333,7 @@ void Recorder::copyConfigSnapshot()
     }
 }
 
-bool Recorder::startSession(const std::string &reason)
+bool Recorder::startSession(const std::string &reason, const std::string &image_mode)
 {
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
@@ -342,6 +343,8 @@ bool Recorder::startSession(const std::string &reason)
             return false;
         }
         if (stopped_.load())
+            return false;
+        if (image_mode != "raw" && image_mode != "debug")
             return false;
 
         session_dir_ = createSessionDir();
@@ -358,6 +361,7 @@ bool Recorder::startSession(const std::string &reason)
         session_end_wall_.clear();
         session_end_us_ = 0;
         session_status_ = "recording";
+        record_image_mode_ = image_mode;
         video_width_ = 0;
         video_height_ = 0;
         video_error_.clear();
@@ -401,7 +405,7 @@ bool Recorder::startSession(const std::string &reason)
             recordError("视频索引 CSV 打开失败: " + video_index_path_);
         }
 
-        video_path_ = (fs::path(session_dir_) / "debug_001.avi").string();
+        video_path_ = (fs::path(session_dir_) / (record_image_mode_ + "_001.avi")).string();
         events_path_ = (fs::path(session_dir_) / "events.jsonl").string();
     }
 
@@ -440,7 +444,7 @@ bool Recorder::startSession(const std::string &reason)
         dir_copy = session_dir_;
     }
     std::cout << "[Recorder] 开始录制 (" << reason << "): " << dir_copy << std::endl;
-    std::cout << "[Recorder]   视频 debug_001.avi (MJPG, 标称 " << options_.video_fps
+    std::cout << "[Recorder]   视频 " << image_mode << "_001.avi (MJPG, 标称 " << options_.video_fps
               << " fps, scale=" << options_.video_scale << ") | 遥测 telemetry_001.csv | 索引 video_index_001.csv"
               << std::endl;
     return true;
@@ -518,15 +522,15 @@ void Recorder::submitFrame(const RecordFrame &frame)
     // M4：记录最近一帧上下文，供人工调试记录事件（manual_note）计算会话时间
     last_frame_id_.store(frame.frame_id);
     last_timestamp_us_.store(frame.timestamp_us);
+    std::lock_guard<std::mutex> session_lock(session_mutex_);
     if (!recording_.load())
         return;
 
+    const int64_t session_start_us = session_start_us_;
+    // 帧处理跨越会话切换时，不把旧会话产生的帧提交到新会话。
+    if (frame.timestamp_us < session_start_us)
+        return;
     frames_processed_.fetch_add(1);
-    int64_t session_start_us = 0;
-    {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        session_start_us = session_start_us_;
-    }
     const int64_t elapsed_us = frame.timestamp_us - session_start_us;
 
     // ---- 1) 逐帧遥测 CSV（每完成一帧就记录，不受预览帧率限制）----
@@ -573,10 +577,10 @@ void Recorder::submitFrame(const RecordFrame &frame)
     }
 
     // ---- 2) 视频帧（有界队列；视觉线程不做缩放/编码/磁盘 IO）----
-    if (!frame.image.empty())
+    const cv::Mat &source = record_image_mode_ == "raw" ? frame.raw_image : frame.image;
+    if (!source.empty())
     {
         VideoItem item;
-        item.image = frame.image; // cv::Mat 引用计数拷贝
         item.frame_id = frame.frame_id;
         item.timestamp_us = frame.timestamp_us;
         item.elapsed_us = elapsed_us;
@@ -585,7 +589,11 @@ void Recorder::submitFrame(const RecordFrame &frame)
         {
             std::lock_guard<std::mutex> lk(video_mutex_);
             if (!video_stop_ && video_queue_.size() < static_cast<std::size_t>(options_.queue_capacity))
+            {
+                // 相机/模拟源可复用缓冲区；调试图像由识别器每帧新建。
+                item.image = record_image_mode_ == "raw" ? source.clone() : source;
                 video_queue_.push_back(std::move(item));
+            }
             else
                 dropped = true;
         }
@@ -778,6 +786,7 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     std::string ended_wall;
     std::string status;
     std::string video_error;
+    std::string image_mode;
     int64_t started_us = 0;
     int64_t ended_us = 0;
     int video_width = 0;
@@ -793,6 +802,7 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
         status = final_write ? (session_status.empty() ? session_status_ : session_status)
                              : (session_status.empty() ? "recording" : session_status);
         video_error = video_error_;
+        image_mode = record_image_mode_;
         started_us = session_start_us_;
         ended_us = final_write ? session_end_us_ : nowSteadyUs();
         video_width = video_width_;
@@ -829,6 +839,7 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     oss << "  \"image_source\": {\"kind\": " << jsonQuoted(options_.source)
         << ", \"label\": " << jsonQuoted(options_.source_label) << "},\n";
     oss << "  \"mode\": " << jsonQuoted(options_.mode) << ",\n";
+    oss << "  \"record_image_mode\": " << jsonQuoted(image_mode) << ",\n";
     oss << "  \"image_size\": {\"width\": " << video_width << ", \"height\": " << video_height << "},\n";
     oss << "  \"counts\": {\n";
     oss << "    \"frames_processed\": " << frames_processed_.load() << ",\n";
@@ -842,13 +853,13 @@ void Recorder::writeSessionJson(bool final_write, const std::string &session_sta
     oss << "    \"manual_notes\": " << manual_notes_.load() << "\n";
     oss << "  },\n";
     oss << "  \"video\": {\n";
-    oss << "    \"file\": \"debug_001.avi\",\n";
+    oss << "    \"file\": " << jsonQuoted(image_mode + "_001.avi") << ",\n";
     oss << "    \"codec\": \"MJPG\",\n";
     oss << "    \"nominal_fps\": " << jsonNumber(options_.video_fps) << ",\n";
     oss << "    \"scale\": " << options_.video_scale << ",\n";
     oss << "    \"width\": " << video_width << ",\n";
     oss << "    \"height\": " << video_height << ",\n";
-    oss << "    \"content\": \"GreenDetect::getDebugImage()（含检测标记/目标中心/调试可视化）\",\n";
+    oss << "    \"content\": " << jsonQuoted(image_mode == "raw" ? "原始采集画面" : "识别调试画面") << ",\n";
     oss << "    \"error\": " << jsonQuoted(video_error) << "\n";
     oss << "  },\n";
     oss << "  \"files\": [";
@@ -987,6 +998,7 @@ std::string Recorder::statusJson() const
     oss << "\"ok\":true,";
     oss << "\"enabled\":" << (options_.enabled ? "true" : "false") << ',';
     oss << "\"recording\":" << (recording_.load() ? "true" : "false") << ',';
+    oss << "\"record_image_mode\":" << jsonQuoted(record_image_mode_) << ',';
     oss << "\"session_dir\":" << jsonQuoted(session_dir_) << ',';
     oss << "\"session\":" << jsonQuoted(session_name_) << ',';
     oss << "\"status\":" << jsonQuoted(session_status_) << ',';
@@ -1066,9 +1078,16 @@ void Recorder::controlLoop()
             }
             else if (cmd == "start")
             {
-                const bool ok = startSession("web_control");
-                response = ok ? statusJson()
-                              : "{\"ok\":false,\"error\":\"start failed (already recording or dir error)\"}";
+                const bool supplied = request.find("\"record_image_mode\"") != std::string::npos;
+                const std::string image_mode = supplied ? extractJsonString(request, "record_image_mode") : "debug";
+                if (image_mode != "raw" && image_mode != "debug")
+                    response = "{\"ok\":false,\"error\":\"record_image_mode must be raw or debug\"}";
+                else
+                {
+                    const bool ok = startSession("web_control", image_mode);
+                    response = ok ? statusJson()
+                                  : "{\"ok\":false,\"error\":\"start failed (already recording or dir error)\"}";
+                }
             }
             else if (cmd == "stop")
             {

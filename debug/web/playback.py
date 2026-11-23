@@ -231,7 +231,12 @@ class ReplaySession:
                 self.events = []
 
         self.video_path = ""
-        for name in ("debug_001.avi", "debug.avi"):
+        mode = self.meta.get("record_image_mode", "debug")
+        video_meta = self.meta.get("video")
+        metadata_file = video_meta.get("file") if isinstance(video_meta, dict) else None
+        allowed = ("raw_001.avi",) if mode == "raw" else ("debug_001.avi", "debug.avi")
+        names = ([metadata_file] if metadata_file in allowed else []) + list(allowed)
+        for name in names:
             candidate = os.path.join(self.dir, name)
             if os.path.isfile(candidate):
                 self.video_path = candidate

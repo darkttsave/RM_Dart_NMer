@@ -776,6 +776,7 @@ int main(int argc, char **argv)
         {
             webdebug::RecordFrame recordFrame;
             recordFrame.image = detector.getDebugImage();
+            recordFrame.raw_image = image;
             recordFrame.frame_id = frameId;
             recordFrame.timestamp_us = frameTimestampUs;
             recordFrame.detected = target.detected;

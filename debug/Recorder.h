@@ -1,10 +1,10 @@
 /**
  * @file Recorder.h
- * @brief 视觉数据录制（M2）：会话目录 + 逐帧遥测 CSV + 调试画面视频 + 视频索引 + 本机控制口
+ * @brief 视觉数据录制（M2）：会话目录 + 逐帧遥测 CSV + 画面视频 + 视频索引 + 本机控制口
  *
  * 设计目标（对应 taskDART-WEB-M2）：
  * - 录制不依赖 Flask / 浏览器：Flask 未启动、浏览器未打开时照常录制；
- * - 复用队内原有录像流程：仍是 cv::VideoWriter + MJPG + 识别后的调试画面（getDebugImage），
+ * - 复用队内原有录像流程：仍是 cv::VideoWriter + MJPG，按会话选择原始或识别调试画面，
  *   只是把原来"视觉线程内同步写 record.avi"改为"后台线程 + 有界队列 + 会话目录"；
  * - 逐帧遥测不受预览帧率限制：视觉线程每完成一帧就提交一行 CSV；
  * - 视频索引只记录"确认写入成功"的视频帧，并与算法处理帧号/时间戳关联；
@@ -15,7 +15,7 @@
  *     ├── session.json                     会话元数据（status: recording -> completed）
  *     ├── config_snapshot/debug.yaml       本次磁盘配置快照
  *     ├── config_snapshot/runtime_params.json  运行时实际生效参数快照
- *     ├── debug_001.avi                   调试画面视频（MJPG）
+ *     ├── debug_001.avi 或 raw_001.avi    单一来源的视频（MJPG）
  *     ├── telemetry_001.csv               逐帧遥测（每算法帧一行）
  *     └── video_index_001.csv             视频帧 -> 算法帧/时间戳 的逐帧索引
  */
@@ -45,7 +45,8 @@ class RuntimeParams;
 /// 单帧录制数据（由视觉线程提交；全部字段来自本帧实际算法输出）
 struct RecordFrame
 {
-    cv::Mat image;               // 调试画面（GreenDetect::getDebugImage()，引用计数拷贝）
+    cv::Mat image;               // 识别调试画面
+    cv::Mat raw_image;           // 原始采集画面；进入视频队列时复制
     uint64_t frame_id = 0;       // 视觉处理帧编号（从 1 开始，逐帧递增）
     int64_t timestamp_us = 0;    // 处理完成时刻的 std::chrono::steady_clock 微秒时间戳
     bool detected = false;
@@ -98,7 +99,7 @@ struct RecordOptions
  * @brief 录制器
  *
  * 线程模型：
- * - 视觉线程：submitFrame() 只格式化一行 CSV + 把 Mat 引用放入有界队列（微秒级）；
+ * - 视觉线程：submitFrame() 格式化 CSV 并将画面放入有界队列（原始画面会复制）；
  * - telemetry 线程：批量写 telemetry CSV（带缓冲，定期 flush）；
  * - video 线程：缩放 + MJPG 编码 + 写 AVI，成功写入后写 video_index CSV；
  * - control 线程：监听 127.0.0.1 控制口，支持 start/stop/status（本机调试 IPC）。
@@ -155,7 +156,7 @@ private:
         int64_t elapsed_us = 0;
     };
 
-    bool startSession(const std::string &reason);
+    bool startSession(const std::string &reason, const std::string &image_mode = "debug");
     void stopSession(const std::string &reason);
     void telemetryLoop();
     void videoLoop();
@@ -179,6 +180,7 @@ private:
     std::string session_start_wall_;
     std::string session_end_wall_;
     std::string session_status_;
+    std::string record_image_mode_ = "debug";
     int64_t session_start_us_ = 0;
     int64_t session_end_us_ = 0;
     int video_width_ = 0;

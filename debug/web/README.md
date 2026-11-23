@@ -257,7 +257,7 @@ GUI Trackbar：保留原有调参能力，但运行值只有 `RuntimeParams` 一
 
 | 文件 | 内容 | 说明 |
 |---|---|---|
-| `debug_001.avi` | **识别后的调试画面**（`GreenDetect::getDebugImage()`，含检测标记/目标中心/调试可视化） | MJPG 编码；标称 `video_fps`（默认 30，仅播放器默认速度）；实际帧时间以视频索引为准 |
+| `debug_001.avi` 或 `raw_001.avi` | 调试画面（默认，含识别标记）或未经算法标注的原始采集画面，每次会话仅保存一种 | MJPG 编码；标称 `video_fps`（默认 30）；实际帧时间以视频索引为准 |
 | `telemetry_001.csv` | 逐帧遥测（每个算法帧一行，不受预览帧率限制） | 29 列，见下 |
 | `video_index_001.csv` | 视频帧 → 算法帧/时间戳 逐帧索引 | 只记录确认写入成功的视频帧 |
 | `session.json` | 会话元数据（状态、时间、统计、文件清单、错误） | 原子替换写入；异常结束时 `status=recording` |
@@ -298,6 +298,11 @@ video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us
 - 跨机器回放只用 `elapsed_us`（相对会话开始），不依赖绝对单调时间。
 
 ### 5.5 录制控制
+
+实时页面顶栏可在开始前选择「调试画面」或「原始画面」，录制期间锁定并显示当前来源，停止后可重新选择。实时预览仍使用调试画面。原始画面指未叠加算法标记，MJPG 编码并非无损。
+
+`POST /api/recorder` 开始命令支持 `{"cmd":"start","record_image_mode":"raw"}` 或 `"debug"`；省略模式和自动录制均默认为 `debug`，其他值会被拒绝。每个会话的 `session.json` 记录 `record_image_mode` 及视频文件名。旧会话缺少该字段时仍按调试录像回放。
+
 
 1. **启动参数**（不依赖 Flask）：
    - `--record` / `--no-record`：开关录制（覆盖配置）；

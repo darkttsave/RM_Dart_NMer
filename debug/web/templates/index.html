@@ -36,6 +36,10 @@
       <i class="dot"></i><span id="linkText">等待视觉程序…</span>
     </span>
     <span class="chip" id="recordChip" title="本地录制状态（录制主体在 C++ 视觉程序侧）">录制：--</span>
+    <select id="recordImageMode" class="mini" aria-label="录像来源" title="录像来源">
+      <option value="debug" selected>调试画面</option>
+      <option value="raw">原始画面</option>
+    </select>
     <button class="record-btn" id="recordToggleBtn" type="button"
             title="开始/停止本地录制（录制主体在 C++ 侧，Flask 仅转发控制）">开始录制</button>
     <span class="chip" id="fpsChip">FPS --</span>
@@ -951,9 +955,14 @@ function renderRecorder(data) {
   const active = !!data.recording;
   recState.active = active;
   recState.available = true;
+  const mode = data.record_image_mode === "raw" ? "raw" : "debug";
+  const modeLabel = mode === "raw" ? "原始画面" : "调试画面";
+  const selector = $("recordImageMode");
+  selector.disabled = active;
+  if (active) selector.value = mode;
 
   // 顶栏状态 chip（高频操作：状态常驻，详情在底栏/浮层）
-  setChip("recordChip", active ? "● 录制中" : "录制：未录制", active ? "ok" : "");
+  setChip("recordChip", active ? `● 录制中 · ${modeLabel}` : "录制：未录制", active ? "ok" : "");
   $("recordChip").title = active
     ? `录制会话：${data.session || "--"}（视频 ${data.video_frames || 0} 帧 / 遥测 ${data.telemetry_rows || 0} 行）`
     : "当前未录制";
@@ -1026,7 +1035,7 @@ async function toggleRecording() {
     const resp = await fetch("/api/recorder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cmd: target ? "start" : "stop" }),
+      body: JSON.stringify(target ? { cmd: "start", record_image_mode: $("recordImageMode").value } : { cmd: "stop" }),
     });
     const data = await resp.json();
     if (data.ok === false) {

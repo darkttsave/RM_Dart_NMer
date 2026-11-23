@@ -333,6 +333,11 @@ def api_recorder():
             cmd = "start" if payload.get("enabled") else "stop"
         if cmd not in ("start", "stop", "status"):
             return jsonify({"ok": False, "error": "cmd 必须是 start/stop/status"}), 400
+        if cmd == "start":
+            image_mode = payload.get("record_image_mode", "debug")
+            if not isinstance(image_mode, str) or image_mode not in ("raw", "debug"):
+                return jsonify({"ok": False, "error": "record_image_mode 必须是 raw 或 debug"}), 400
+            return jsonify(recorder_command({"cmd": "start", "record_image_mode": image_mode}, control_port))
         return jsonify(recorder_command(cmd, control_port))
     return jsonify(recorder_command("status", control_port))
 
