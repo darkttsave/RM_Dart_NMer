@@ -11,11 +11,32 @@
 
 #pragma once
 
+#include <cstdint>
 #include "camutils.hpp"
 #include "rmvl/core/util.hpp"
 
 namespace rm
 {
+
+struct HikFrameDiagnostics
+{
+    bool valid = false;
+    bool attempted = false;
+    double wait_ms = 0;
+    double convert_ms = 0;
+    std::uint64_t received = 0;
+    std::uint64_t failures = 0;
+    std::uint64_t gaps = 0;
+    std::uint64_t missed = 0;
+    std::uint64_t resets = 0;
+    std::uint64_t frame_wraps = 0;
+    std::uint64_t timestamp_backwards = 0;
+    std::uint64_t reconnects = 0;
+    std::uint64_t device_timestamp = 0;
+    std::uint32_t frame_number = 0;
+    unsigned width = 0;
+    unsigned height = 0;
+};
 
 //! @addtogroup camera
 //! @{
@@ -79,6 +100,11 @@ public:
 
     //! 相机是否打开
     bool isOpened() const;
+
+    //! 每次成功打开设备递增，用于重连后重新应用配置。
+    std::uint64_t connectionGeneration() const;
+    void enableDiagnostics(bool enabled);
+    HikFrameDiagnostics diagnostics() const;
 
     /**
      * @brief 从相机设备中读取图像

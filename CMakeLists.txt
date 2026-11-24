@@ -53,3 +53,13 @@ set_target_properties(camera_test PROPERTIES BUILD_RPATH "${HIK_SDK_LIB_DIR}")
 
 add_executable(test_dart_tracking tests/test_dart_tracking.cpp)
 target_link_libraries(test_dart_tracking PRIVATE dart_vision dart_debug)
+
+add_executable(test_green_equivalence tests/test_green_equivalence.cpp)
+target_include_directories(test_green_equivalence PRIVATE ${PROJECT_SOURCE_DIR}/tasks/dart)
+target_link_libraries(test_green_equivalence PRIVATE dart_vision)
+
+add_executable(test_green_debug_modes tests/test_green_debug_modes.cpp)
+target_link_libraries(test_green_debug_modes PRIVATE dart_vision)
+
+add_executable(test_web_performance tests/test_web_performance.cpp)
+target_include_directories(test_web_performance PRIVATE ${PROJECT_SOURCE_DIR})

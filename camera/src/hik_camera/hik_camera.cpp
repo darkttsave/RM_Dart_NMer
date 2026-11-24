@@ -27,6 +27,9 @@ bool HikCamera::set(int propId, double value) { return _impl->set(propId, value)
 double HikCamera::get(int propId) const { return _impl->get(propId); }
 bool HikCamera::read(cv::OutputArray image) { return _impl->read(image); }
 bool HikCamera::isOpened() const { return _impl->isOpened(); }
+std::uint64_t HikCamera::connectionGeneration() const { return _impl->connectionGeneration(); }
+void HikCamera::enableDiagnostics(bool enabled) { _impl->enableDiagnostics(enabled); }
+HikFrameDiagnostics HikCamera::diagnostics() const { return _impl->diagnostics(); }
 bool HikCamera::reconnect() { return _impl->reconnect(); }
 
 //! MV_CC_PIXEL_CONVERT_PARAM 的初始化变量
@@ -162,6 +165,7 @@ bool HikCamera::Impl::open() noexcept
         return false;
     }
     _opened = true;
+    ++_connection_generation;
     return true;
 }
 
@@ -256,6 +260,7 @@ bool HikCamera::Impl::read(cv::OutputArray image) noexcept
 {
     using namespace std::chrono_literals;
     auto now = std::chrono::steady_clock::now();
+    if (_diagnostics_enabled) { _diagnostics.valid = false; _diagnostics.attempted = false; }
 
     if (!_opened || _handle == nullptr)
     {
@@ -269,9 +274,47 @@ bool HikCamera::Impl::read(cv::OutputArray image) noexcept
     }
 
     // 获取图像地址
+    const auto waitStart = std::chrono::steady_clock::now();
     auto ret = MV_CC_GetImageBuffer(_handle, &_p_out, 1000);
+    const auto waitEnd = std::chrono::steady_clock::now();
+    if (_diagnostics_enabled)
+    {
+        _diagnostics.attempted = true;
+        _diagnostics.valid = ret == MV_OK;
+        _diagnostics.wait_ms = std::chrono::duration<double, std::milli>(waitEnd - waitStart).count();
+        if (ret == MV_OK)
+        {
+            const auto &f = _p_out.stFrameInfo;
+            const auto ts = (std::uint64_t(f.nDevTimeStampHigh) << 32) | f.nDevTimeStampLow;
+            if (_have_previous_frame)
+            {
+                if (_diagnostics.frame_number >= 0xf0000000u && f.nFrameNum <= 0x0fffffffu)
+                    ++_diagnostics.frame_wraps;
+                else if (f.nFrameNum > _diagnostics.frame_number && f.nFrameNum - _diagnostics.frame_number < 0x80000000u)
+                {
+                    const auto diff = f.nFrameNum - _diagnostics.frame_number;
+                    if (diff > 1) { ++_diagnostics.gaps; _diagnostics.missed += diff - 1; }
+                }
+                else if (f.nFrameNum != _diagnostics.frame_number + 1u)
+                    ++_diagnostics.resets;
+                if (ts < _diagnostics.device_timestamp) ++_diagnostics.timestamp_backwards;
+            }
+            _have_previous_frame = true;
+            ++_diagnostics.received;
+            _diagnostics.frame_number = f.nFrameNum;
+            _diagnostics.device_timestamp = ts;
+            _diagnostics.width = f.nWidth;
+            _diagnostics.height = f.nHeight;
+        }
+        else ++_diagnostics.failures;
+    }
     if (ret == MV_OK)
+    {
+        const auto convertStart = std::chrono::steady_clock::now();
         retrieve(image, _init_mode.retrieve_mode);
+        if (_diagnostics_enabled)
+            _diagnostics.convert_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - convertStart).count();
+    }
     else
     {
         if (now - _last_read_warn >= 1s)
@@ -303,6 +346,7 @@ bool HikCamera::Impl::reconnect() noexcept
 {
     using namespace std::chrono_literals;
     INFO_("hik - camera device reconnect");
+    if (_diagnostics_enabled) { ++_diagnostics.reconnects; _have_previous_frame = false; }
     if (_opened || _handle != nullptr)
         release();
     std::this_thread::sleep_for(100ms);

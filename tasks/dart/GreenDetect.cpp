@@ -9,7 +9,36 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <yaml-cpp/yaml.h>
+
+namespace {
+using Clock = std::chrono::steady_clock;
+struct StageTimer {
+    bool enabled; double &result; Clock::time_point start;
+    StageTimer(bool on, double &target) : enabled(on), result(target) { if (enabled) start = Clock::now(); }
+    ~StageTimer() { if (enabled) result += std::chrono::duration<double, std::milli>(Clock::now()-start).count(); }
+};
+}
+
+GreenDetect::ProfileFrame::ProfileFrame(GreenDetect &o) : owner(o) { if (owner.profileEnabled_) owner.profileTimes_.fill(0); }
+GreenDetect::ProfileFrame::~ProfileFrame() { if (owner.profileEnabled_) owner.finishProfileFrame(); }
+void GreenDetect::finishProfileFrame()
+{
+    for (size_t i=0; i<profileTimes_.size(); ++i) profileSamples_[i].push_back(profileTimes_[i]);
+    if (Clock::now() - profileStart_ < std::chrono::seconds(5)) return;
+    const char *names[] = {"G01_hsv_brightness", "G02_split", "G03_fused_color", "G04_dominance", "G05_morphology", "G06_contours", "G07_geometry", "G08_drawing"};
+    for (size_t i=0; i<profileSamples_.size(); ++i) {
+        auto &v = profileSamples_[i];
+        const double mean = std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+        std::sort(v.begin(), v.end());
+        std::cout << "[GreenPerf] " << names[i] << " n=" << v.size() << " mean_ms=" << mean
+                  << " p50_ms=" << v[(v.size()-1)/2] << " p95_ms=" << v[(v.size()-1)*95/100]
+                  << " max_ms=" << v.back() << std::endl;
+        v.clear();
+    }
+    profileStart_ = Clock::now();
+}
 
 GreenDetect::GreenDetect()
     : minRadius_(0), maxRadius_(50), imageCenter_(720, 540),
@@ -110,6 +139,7 @@ GreenDetect::~GreenDetect()
 
 GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
 {
+    ProfileFrame profile(*this);
     TargetInfo result;
     result.detected = false;
     result.turnFlag = 0.0f;
@@ -125,7 +155,8 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
         return result;
 
     imageCenter_ = Point2f(image.cols / 2.0f, image.rows / 2.0f);
-    debugImage_ = image.clone();
+    if (drawDebug_) { StageTimer t(profileEnabled_, profileTimes_[7]); debugImage_ = image.clone(); }
+    else debugImage_.release();
 
     Mat greenBinary = preprocessGreenChannel(image);
 
@@ -142,12 +173,18 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
             if (lostFrames_ >= requiredLostFrames_)
                 tracking_ = false;
         }
-        cv::putText(debugImage_, "No Green In View",
-                    Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1, Scalar(0, 0, 255), 2);
+        if (drawDebug_) {
+            StageTimer t(profileEnabled_, profileTimes_[7]);
+            cv::putText(debugImage_, "No Green In View",
+                        Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1, Scalar(0, 0, 255), 2);
+        }
         return result;
     }
 
+    const auto geometryStart = profileEnabled_ ? Clock::now() : Clock::time_point{};
+    const double contourBefore = profileTimes_[5], drawingBefore = profileTimes_[7];
     std::vector<Vec3f> circles = detectCircles(greenBinary);
+    if (profileEnabled_) profileTimes_[6] += std::max(0.0, std::chrono::duration<double, std::milli>(Clock::now()-geometryStart).count() - (profileTimes_[5]-contourBefore) - (profileTimes_[7]-drawingBefore));
 
     if (!circles.empty())
     {
@@ -195,34 +232,37 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
                 result.distanceFlag = 3.0f;
         }
 
-        cv::circle(debugImage_, result.center, result.radius, Scalar(0, 255, 255), 4);
-        int crossSize = std::max(15, static_cast<int>(result.radius * 0.3));
-        cv::line(debugImage_, Point(result.center.x - crossSize, result.center.y),
-                 Point(result.center.x + crossSize, result.center.y), Scalar(0, 0, 255), 4);
-        cv::line(debugImage_, Point(result.center.x, result.center.y - crossSize),
-                 Point(result.center.x, result.center.y + crossSize), Scalar(0, 0, 255), 4);
-        cv::circle(debugImage_, result.center, 5, Scalar(0, 0, 255), -1);
-        cv::line(debugImage_, Point(imageCenter_.x - 15, imageCenter_.y),
-                 Point(imageCenter_.x + 15, imageCenter_.y), Scalar(255, 100, 0), 3);
-        cv::line(debugImage_, Point(imageCenter_.x, imageCenter_.y - 15),
-                 Point(imageCenter_.x, imageCenter_.y + 15), Scalar(255, 100, 0), 3);
-        // 第一行：追踪进度
-        {
-            std::string trackStr;
+        if (drawDebug_) {
+            StageTimer t(profileEnabled_, profileTimes_[7]);
+            cv::circle(debugImage_, result.center, result.radius, Scalar(0, 255, 255), 4);
+            int crossSize = std::max(15, static_cast<int>(result.radius * 0.3));
+            cv::line(debugImage_, Point(result.center.x - crossSize, result.center.y),
+                     Point(result.center.x + crossSize, result.center.y), Scalar(0, 0, 255), 4);
+            cv::line(debugImage_, Point(result.center.x, result.center.y - crossSize),
+                     Point(result.center.x, result.center.y + crossSize), Scalar(0, 0, 255), 4);
+            cv::circle(debugImage_, result.center, 5, Scalar(0, 0, 255), -1);
+            cv::line(debugImage_, Point(imageCenter_.x - 15, imageCenter_.y),
+                     Point(imageCenter_.x + 15, imageCenter_.y), Scalar(255, 100, 0), 3);
+            cv::line(debugImage_, Point(imageCenter_.x, imageCenter_.y - 15),
+                     Point(imageCenter_.x, imageCenter_.y + 15), Scalar(255, 100, 0), 3);
+            // 第一行：追踪进度
+            {
+                std::string trackStr;
+                if (tracking_)
+                    trackStr = "Tracking  lost:" + std::to_string(lostFrames_) + "/" + std::to_string(requiredLostFrames_);
+                else
+                    trackStr = "Lock: " + std::to_string(consecutiveFrames_) + "/" + std::to_string(requiredFrames_);
+                cv::putText(debugImage_, trackStr, Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+            }
+            // 第二行：偏转方向（仅追踪稳定后）
             if (tracking_)
-                trackStr = "Tracking  lost:" + std::to_string(lostFrames_) + "/" + std::to_string(requiredLostFrames_);
-            else
-                trackStr = "Lock: " + std::to_string(consecutiveFrames_) + "/" + std::to_string(requiredFrames_);
-            cv::putText(debugImage_, trackStr, Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
-        }
-        // 第二行：偏转方向（仅追踪稳定后）
-        if (tracking_)
-        {
-            std::string turnStr;
-            if (result.turnFlag == 1.0f)       turnStr = "Turn: LEFT";
-            else if (result.turnFlag == 2.0f)  turnStr = "Turn: RIGHT";
-            else                               turnStr = "Turn: ALIGN";
-            cv::putText(debugImage_, turnStr, Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 200, 255), 2);
+            {
+                std::string turnStr;
+                if (result.turnFlag == 1.0f)       turnStr = "Turn: LEFT";
+                else if (result.turnFlag == 2.0f)  turnStr = "Turn: RIGHT";
+                else                               turnStr = "Turn: ALIGN";
+                cv::putText(debugImage_, turnStr, Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 200, 255), 2);
+            }
         }
     }
     else
@@ -234,18 +274,21 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
             if (lostFrames_ >= requiredLostFrames_)
                 tracking_ = false;
         }
-        cv::line(debugImage_, Point(imageCenter_.x - 15, imageCenter_.y),
-                 Point(imageCenter_.x + 15, imageCenter_.y), Scalar(255, 100, 0), 3);
-        cv::line(debugImage_, Point(imageCenter_.x, imageCenter_.y - 15),
-                 Point(imageCenter_.x, imageCenter_.y + 15), Scalar(255, 100, 0), 3);
-        cv::circle(debugImage_, imageCenter_, 5, Scalar(255, 100, 0), -1);
-        {
-            std::string trackStr;
-            if (tracking_)
-                trackStr = "Tracking  lost:" + std::to_string(lostFrames_) + "/" + std::to_string(requiredLostFrames_);
-            else
-                trackStr = "No Target  lock:0/" + std::to_string(requiredFrames_);
-            cv::putText(debugImage_, trackStr, Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 255), 2);
+        if (drawDebug_) {
+            StageTimer t(profileEnabled_, profileTimes_[7]);
+            cv::line(debugImage_, Point(imageCenter_.x - 15, imageCenter_.y),
+                     Point(imageCenter_.x + 15, imageCenter_.y), Scalar(255, 100, 0), 3);
+            cv::line(debugImage_, Point(imageCenter_.x, imageCenter_.y - 15),
+                     Point(imageCenter_.x, imageCenter_.y + 15), Scalar(255, 100, 0), 3);
+            cv::circle(debugImage_, imageCenter_, 5, Scalar(255, 100, 0), -1);
+            {
+                std::string trackStr;
+                if (tracking_)
+                    trackStr = "Tracking  lost:" + std::to_string(lostFrames_) + "/" + std::to_string(requiredLostFrames_);
+                else
+                    trackStr = "No Target  lock:0/" + std::to_string(requiredFrames_);
+                cv::putText(debugImage_, trackStr, Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 255), 2);
+            }
         }
     }
 
@@ -254,45 +297,34 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
 
 Mat GreenDetect::preprocessGreenChannel(const Mat &image)
 {
-    // 亮区 mask：HSV V 通道 > bright_thresh_
-    Mat hsv;
-    cv::cvtColor(image, hsv, cv::COLOR_BGR2HSV);
-    std::vector<Mat> hsvCh;
-    cv::split(hsv, hsvCh);
-    Mat brightMask;
-    cv::threshold(hsvCh[2], brightMask, brightThresh_, 255, cv::THRESH_BINARY);
+    Mat binary(image.size(), CV_8UC1);
+    {
+        // G > B 且 G > R 时，HSV 的 V 恰好为 G。保留原有浮点除法和严格大于比较，
+        // 合并颜色条件以减少中间图与全图遍历。支持非连续 Mat 的逐行访问。
+        StageTimer t(profileEnabled_, profileTimes_[2]);
+        for (int y = 0; y < image.rows; ++y) {
+            const auto *src = image.ptr<cv::Vec3b>(y);
+            auto *dst = binary.ptr<uchar>(y);
+            for (int x = 0; x < image.cols; ++x) {
+                const int b = src[x][0], g = src[x][1], r = src[x][2];
+                dst[x] = g > brightThresh_ && g > b && g > r &&
+                         static_cast<float>(g) / static_cast<float>(b + g + r + 1) > greenWeightThresh_ ? 255 : 0;
+            }
+        }
+    }
 
-    // 归一化绿色权重：G / (R+G+B+1) > green_weight_thresh_
-    Mat bgr[3];
-    cv::split(image, bgr);
-    Mat sum, weightMap, greenMask;
-    bgr[0].convertTo(bgr[0], CV_32F);
-    bgr[1].convertTo(bgr[1], CV_32F);
-    bgr[2].convertTo(bgr[2], CV_32F);
-    sum = bgr[0] + bgr[1] + bgr[2] + 1.0f;
-    weightMap = bgr[1] / sum; // G channel
-    cv::threshold(weightMap, greenMask, greenWeightThresh_, 255, cv::THRESH_BINARY);
-    greenMask.convertTo(greenMask, CV_8U);
-
-    Mat binary;
-    cv::bitwise_and(brightMask, greenMask, binary);
-
-    // 绿色相对优势：G 必须同时强于 R 和 B，排除青色/蓝色/黄色
-    // （2026-07-24 队内最新改动，同步自桌面现场代码）
-    Mat gGreaterB, gGreaterR, dominantMask;
-    cv::compare(bgr[1], bgr[0], gGreaterB, cv::CMP_GT); // G > B
-    cv::compare(bgr[1], bgr[2], gGreaterR, cv::CMP_GT); // G > R
-    cv::bitwise_and(gGreaterB, gGreaterR, dominantMask);
-    cv::bitwise_and(binary, dominantMask, binary);
-
+    {
+    StageTimer t(profileEnabled_, profileTimes_[4]);
     int kSize = (kernelSize_ % 2 == 0) ? kernelSize_ + 1 : kernelSize_;
     Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kSize, kSize));
     for (int i = 0; i < openIterations_; i++)
         cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
     for (int i = 0; i < closeIterations_; i++)
         cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
+    }
 
-    binaryImage_ = binary.clone();
+    if (drawDebug_) binaryImage_ = binary.clone();
+    else binaryImage_.release();
     return binary;
 }
 
@@ -304,7 +336,7 @@ std::vector<Vec3f> GreenDetect::detectCircles(const Mat &binaryImage)
         return circles;
 
     std::vector<std::vector<Point>> contours;
-    cv::findContours(binaryImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    { StageTimer t(profileEnabled_, profileTimes_[5]); cv::findContours(binaryImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE); }
     if (contours.empty())
         return circles;
 
@@ -333,6 +365,7 @@ std::vector<Vec3f> GreenDetect::detectCircles(const Mat &binaryImage)
 
         if (!debugImage_.empty())
         {
+            StageTimer t(profileEnabled_, profileTimes_[7]);
             cv::rectangle(debugImage_, br, boxColor, 1);
             // 每行一个参数，显示在轮廓框右侧或下方
             int tx = br.x + br.width + 4;

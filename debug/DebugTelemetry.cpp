@@ -214,6 +214,14 @@ void DebugTelemetry::run()
             cv_.wait_until(lock, next_send_, [this]() { return stop_requested_.load(); });
             continue;
         }
+        // 等待发送时隙期间可能已有新帧，发送前取最新单槽，避免固定滞后一个周期。
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (pending_.has_value()) {
+                staged = std::move(pending_);
+                pending_.reset();
+            }
+        }
         next_send_ = now + interval;
 
         // 3) 编码并发送（仅在后台线程发生）
@@ -386,6 +394,23 @@ bool DebugTelemetry::sendFrame(const DebugFrame &frame)
     oss << "},";
     appendFloatField(oss, "fps", frame.fps);
     appendFloatField(oss, "processing_time_ms", frame.processing_time_ms);
+    auto optionalFloat = [&oss](const char *name, const std::optional<double> &v) {
+        oss << '"' << name << "\":";
+        if (v && std::isfinite(*v)) oss << *v; else oss << "null";
+        oss << ',';
+    };
+    auto optionalCount = [&oss](const char *name, const std::optional<std::uint64_t> &v) {
+        oss << '"' << name << "\":";
+        if (v) oss << *v; else oss << "null";
+        oss << ',';
+    };
+    optionalFloat("processing_fps_5s", frame.processing_fps_5s);
+    optionalFloat("processing_p95_ms", frame.processing_p95_ms);
+    optionalFloat("host_receive_fps", frame.host_receive_fps);
+    optionalFloat("processing_window_s", frame.processing_window_s);
+    optionalCount("processing_window_frames", frame.processing_window_frames);
+    optionalCount("camera_missing_frames", frame.camera_missing_frames);
+    optionalCount("camera_gap_events", frame.camera_gap_events);
     oss << "\"tracking\":" << (frame.tracking ? "true" : "false") << ',';
     oss << "\"lock_frames\":" << frame.lock_frames << ',';
     oss << "\"required_frames\":" << frame.required_frames << ',';

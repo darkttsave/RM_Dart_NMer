@@ -22,6 +22,7 @@ cmake -S . -B build && cmake --build build -j2
 ```bash
 ./build/camera_test                 # 无界面采集并输出帧率
 ./build/camera_test --display --frames=0 # 持续预览，按 q 或 Esc 退出
+./run_web_debug.sh --headless --no-serial --no-record --perf # 相机及处理耗时统计
 ```
 
 独立运行（无 Flask 和 OpenCV 窗口）：

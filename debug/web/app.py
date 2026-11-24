@@ -66,7 +66,8 @@ class FrameReceiver(threading.Thread):
         self._protocol_errors = 0
         self._overwritten = 0
         self._listen_error = ""
-        self._recv_times = deque(maxlen=120)  # 用于计算接收帧率
+        self._recv_times = deque(maxlen=10000)  # 最近一秒接收时间，不是浏览器渲染帧率
+        self._receive_window_start = 0.0
         self._stop = threading.Event()
 
     # -------- 生命周期 --------
@@ -94,6 +95,15 @@ class FrameReceiver(threading.Thread):
             with self._cond:
                 self._connected = True
                 self._client_addr = f"{addr[0]}:{addr[1]}"
+                self._recv_times.clear()
+                self._latest_recv_mono = 0.0
+                self._receive_window_start = time.monotonic()
+                # 新连接可能来自重启后的进程，其 seq 会从头开始。
+                self._latest_seq = 0
+                self._latest_json = None
+                self._latest_jpeg = b""
+                self._history.clear()
+                self._cond.notify_all()
             try:
                 self._serve_connection(conn)
             finally:
@@ -160,6 +170,8 @@ class FrameReceiver(threading.Thread):
             self._latest_recv_mono = now
             self._total_frames += 1
             self._recv_times.append(now)
+            while self._recv_times and self._recv_times[0] <= now - 1.0:
+                self._recv_times.popleft()
             # 曲线样本（去掉大字段？JSON 本身很小，直接存）
             self._history.append((seq, payload))
             self._cond.notify_all()
@@ -169,7 +181,7 @@ class FrameReceiver(threading.Thread):
         """等待比 last_seq 更新的帧；返回 (seq, jpeg) 或 None。"""
         deadline = time.monotonic() + timeout
         with self._cond:
-            while self._latest_seq <= last_seq or self._latest_seq == 0:
+            while self._latest_seq == last_seq or self._latest_seq == 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or self._stop.is_set():
                     return None
@@ -188,11 +200,11 @@ class FrameReceiver(threading.Thread):
             age_ms = None
             if self._latest_recv_mono > 0:
                 age_ms = round((now - self._latest_recv_mono) * 1000.0, 1)
-            recv_fps = 0.0
-            if len(self._recv_times) >= 2:
-                span = self._recv_times[-1] - self._recv_times[0]
-                if span > 0:
-                    recv_fps = round((len(self._recv_times) - 1) / span, 2)
+            while self._recv_times and self._recv_times[0] <= now - 1.0:
+                self._recv_times.popleft()
+            stale = age_ms is None or age_ms > STALE_AFTER_S * 1000.0
+            recv_fps = (len(self._recv_times) if self._connected and not stale and
+                        now - self._receive_window_start >= 1.0 else None)
             return {
                 "listening": self._listen_error == "",
                 "listen_error": self._listen_error,
@@ -202,7 +214,7 @@ class FrameReceiver(threading.Thread):
                 "recv_fps": recv_fps,
                 "last_seq": self._latest_seq,
                 "last_frame_age_ms": age_ms,
-                "stale": age_ms is None or age_ms > STALE_AFTER_S * 1000.0,
+                "stale": stale,
                 "protocol_errors": self._protocol_errors,
             }
 
@@ -299,9 +311,12 @@ def api_telemetry_stream():
     @stream_with_context
     def generate():
         last_seq = start_seq
+        last_heartbeat = 0.0
         while True:
-            samples = receiver.samples_after(last_seq)
             status = receiver.status()
+            if status["connected"] and 0 < status["last_seq"] < last_seq:
+                last_seq = 0  # C++ 进程重启，发布序号重新开始。
+            samples = receiver.samples_after(last_seq)
             if samples:
                 last_seq = int(samples[-1]["seq"])
                 payload = {"samples": samples, "next_seq": last_seq,
@@ -309,8 +324,12 @@ def api_telemetry_stream():
                 yield "data: " + json.dumps(payload, ensure_ascii=False,
                                             separators=(",", ":")) + "\n\n"
             else:
-                # 心跳：保持连接，同时让前端及时更新链路状态
-                yield ": keepalive " + json.dumps(status, ensure_ascii=False) + "\n\n"
+                # 有效 SSE 数据事件，让断连/过期状态能及时更新页面。
+                now = time.monotonic()
+                if now - last_heartbeat >= 0.5:
+                    payload = {"samples": [], "next_seq": last_seq, "receiver": status}
+                    yield "data: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                    last_heartbeat = now
             time.sleep(0.1)
 
     return Response(generate(), mimetype="text/event-stream",

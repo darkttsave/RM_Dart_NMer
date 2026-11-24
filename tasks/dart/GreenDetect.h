@@ -10,6 +10,8 @@
 
 #include <opencv2/opencv.hpp>
 #include <vector>
+#include <array>
+#include <chrono>
 
 using namespace cv;
 
@@ -61,6 +63,9 @@ public:
      * @return 二值化图像
      */
     Mat getBinaryImage() const { return binaryImage_; }
+    void enablePerformanceProfiling(bool enabled) { profileEnabled_ = enabled; }
+    // 默认保留既有调试输出；仅在明确没有消费者时关闭。
+    void setDebugRendering(bool enabled) { drawDebug_ = enabled; }
 
     // ===== 调试数据只读接口（M1 新增，不改变算法行为）=====
     /** @brief 当前是否处于连续帧确认后的追踪状态 */
@@ -121,6 +126,18 @@ public:
     }
 
 private:
+    struct ProfileFrame
+    {
+        GreenDetect &owner;
+        explicit ProfileFrame(GreenDetect &o);
+        ~ProfileFrame();
+    };
+    void finishProfileFrame();
+    bool profileEnabled_ = false;
+    bool drawDebug_ = true;
+    std::array<double, 8> profileTimes_{};
+    std::array<std::vector<double>, 8> profileSamples_{};
+    std::chrono::steady_clock::time_point profileStart_ = std::chrono::steady_clock::now();
     /**
      * @brief 预处理图像，提取绿色通道
      * @param image 输入图像

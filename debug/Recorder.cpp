@@ -1143,8 +1143,11 @@ void Recorder::controlLoop()
                     if (runtime_params_->applyJsonValues(values, "web", &error, &applied))
                     {
                         std::ostringstream oss;
-                        oss << "{\"ok\":true,\"applied\":" << jsonQuoted(applied)
-                            << ",\"params\":" << runtime_params_->paramsJson() << "}";
+                        oss << "{\"ok\":true,\"applied\":" << jsonQuoted(applied);
+                        const std::string names = "," + applied + ",";
+                        if (names.find(",exposure,") != std::string::npos || names.find(",gain,") != std::string::npos)
+                            oss << ",\"camera_write_confirmed\":false";
+                        oss << ",\"params\":" << runtime_params_->paramsJson() << "}";
                         response = oss.str();
                     }
                     else

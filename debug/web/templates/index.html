@@ -42,7 +42,8 @@
     </select>
     <button class="record-btn" id="recordToggleBtn" type="button"
             title="开始/停止本地录制（录制主体在 C++ 侧，Flask 仅转发控制）">开始录制</button>
-    <span class="chip" id="fpsChip">FPS --</span>
+    <span class="chip" id="fpsChip" title="主循环瞬时帧率的指数平滑">实时处理 (EMA) -- FPS</span>
+    <span class="chip" id="fps5Chip">5 秒平均 -- FPS</span>
     <span class="chip hide-md" id="procChip">识别耗时 -- ms</span>
     <span class="chip" id="txChip" title="本帧实际通过 15 字节协议发送的串口指令">串口输出：--</span>
     <div class="spacer"></div>
@@ -129,7 +130,7 @@
                 <div class="kv"><span class="k">候选轮廓</span><span class="v" id="vCandidates">--</span></div>
               </div>
               <div class="progress"><i id="lockBar"></i></div>
-              <div class="note" id="perfNote">主循环 fps -- · 识别耗时 -- ms</div>
+              <div class="note" id="perfNote" title="处理 P95 为最近完整 5 秒的绿灯加飞镖识别耗时；主机接收不是相机硬件输出，Web 接收不是浏览器渲染帧率。">等待性能数据</div>
             </div>
           </section>
 
@@ -819,11 +820,15 @@ setInterval(drawAll, 100);
 // ---------------------------------------------------------------------------
 function renderPerfNote() {
   const f = state.latest, r = state.receiver;
-  const parts = [];
-  parts.push(`主循环 fps ${f ? fmt(f.fps, 1) : "--"}`);
-  parts.push(`识别耗时 ${f ? fmt(f.processing_time_ms, 1) : "--"} ms`);
-  if (r) parts.push(`接收 ${r.recv_fps || 0} fps`);
-  $("perfNote").textContent = parts.join(" · ");
+  if (!f || !r || !r.connected || r.stale) {
+    $("fpsChip").textContent = "实时处理 (EMA) -- FPS";
+    $("fps5Chip").textContent = "5 秒平均 -- FPS";
+    $("perfNote").textContent = r && r.stale && r.connected ? "性能数据已过期" : "等待性能数据";
+    return;
+  }
+  $("fpsChip").textContent = `实时处理 (EMA) ${fmt(f.fps, 1)} FPS`;
+  $("fps5Chip").textContent = `5 秒平均 ${fmt(f.processing_fps_5s, 1)} FPS`;
+  $("perfNote").textContent = `主机接收 ${fmt(f.host_receive_fps, 1)} FPS · Web 接收 ${fmt(r.recv_fps, 1)} FPS · 处理 P95 ${fmt(f.processing_p95_ms, 1)} ms · 相机帧号缺失 ${fmtInt(f.camera_missing_frames)}（跳变 ${fmtInt(f.camera_gap_events)} 次）`;
 }
 
 function renderFrame(f) {
@@ -840,7 +845,6 @@ function renderFrame(f) {
   if (typeof f.seq === "number") state.lastSeq = Math.max(state.lastSeq, f.seq);
 
   // 顶栏 / 视频区
-  $("fpsChip").textContent = `FPS ${fmt(f.fps, 1)}`;
   $("procChip").textContent = `识别耗时 ${fmt(f.processing_time_ms, 1)} ms`;
   $("sourceChip").textContent = `数据来源：${f.source_label || f.source || "--"}`;
   $("videoSub").textContent = f.source_label || f.source || "--";
@@ -930,7 +934,7 @@ function updateReceiver(r) {
   const ageText = (r.last_frame_age_ms === null || r.last_frame_age_ms === undefined)
     ? "--" : `${Math.round(r.last_frame_age_ms)} ms`;
   $("footAge").textContent = `帧龄 ${ageText}`;
-  $("vRecvFps").textContent = `${r.recv_fps || 0} fps`;
+  $("vRecvFps").textContent = `${fmt(r.recv_fps, 1)} fps`;
   $("vRecvAge").textContent = ageText;
   $("vRecvTotal").textContent = `${r.total_frames || 0} 帧`;
   const linkState = !r.listening ? "监听失败" : (connected ? (stale ? "数据过期" : "已连接") : "等待连接");
@@ -980,6 +984,7 @@ function connectStream() {
   };
   es.onerror = () => {
     setChip("linkChip", "后端连接中断，重连中…", "err");
+    if (state.receiver) { state.receiver.stale = true; updateReceiver(state.receiver); }
   };
 }
 
@@ -1335,7 +1340,11 @@ async function applyParams() {
     paramState.edited.clear();
     applyParamData(data.params || { ok: false, error: "返回数据缺失" });
     const names = String(data.applied || "").split(",").filter(Boolean);
-    setParamMessage(`已应用 ${names.length} 项（${names.join("、")}）；尚未保存到配置文件`, "ok", 6000);
+    if (names.includes("exposure") || names.includes("gain")) {
+      setParamMessage(`已更新 ${names.length} 项运行参数；相机写入尚未确认，失败会记录警告并重试。尚未保存配置。`, "warn", 10000);
+    } else {
+      setParamMessage(`已应用 ${names.length} 项（${names.join("、")}）；尚未保存到配置文件`, "ok", 6000);
+    }
     syncParamButtons();
   } catch (error) {
     setParamMessage("应用失败：无法连接后端", "err", 6000);

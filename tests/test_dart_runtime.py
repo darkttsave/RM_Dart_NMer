@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """P2-B 本地进程、参数、事件和录像集成测试；不修改工作区配置。"""
-import csv, json, os, re, signal, socket, subprocess, sys, tempfile, time
+import csv, json, os, re, signal, socket, subprocess, sys, tempfile, time, threading
 from pathlib import Path
 import cv2
 import numpy as np
@@ -47,6 +47,12 @@ def main():
     try:
         wait(lambda:get('/api/params').get('ok'))
         wait(lambda:dart().get('enabled') and dart().get('candidate_count',0)>0)
+        perf = wait(lambda: (f if (f:=frame()).get('processing_fps_5s') is not None else None))
+        assert abs(perf['processing_fps_5s'] - perf['processing_window_frames'] / perf['processing_window_s']) < .001
+        assert perf['processing_p95_ms'] >= 0 and perf['host_receive_fps'] is None
+        assert perf['camera_missing_frames'] is None
+        assert get('/api/status')['receiver']['recv_fps'] is not None
+        print('PASS 五秒帧数/实测时间、P95、模拟源无相机帧号及 Web 接收率')
         first=get('/api/params');assert first['running']['dart_color']==0
         # 整组非法值必须拒绝，其他有效值不能部分生效。
         before=first['running']['dart_value_min']
@@ -105,9 +111,35 @@ def main():
         assert all(r['source_frame_id'] in ids and r['source_elapsed_us']==ids[r['source_frame_id']]['elapsed_us'] for r in indices)
         cap=cv2.VideoCapture(str(session/'raw_001.avi'));assert cap.isOpened() and cap.read()[0];cap.release()
         print('PASS 热更新、原子校验、录像诊断、事件和索引')
-        stop(proc);proc=start_main()
+        # 保持同一 MJPEG 连接，验证 C++ 序号重置后的恢复。
+        stream = requests.get(base+'/video_feed', stream=True, timeout=12)
+        stream_count = [0]
+        def consume():
+            try:
+                for line in stream.iter_lines(chunk_size=8192):
+                    if line.lower().startswith(b'content-type: image/jpeg'): stream_count[0] += 1
+            except (requests.RequestException, OSError, AttributeError, ValueError): pass
+        threading.Thread(target=consume,daemon=True).start()
+        wait(lambda:stream_count[0]>=2)
+        old_seq = frame()['seq']
+        stop(proc)
+        wait(lambda: not get('/api/status')['receiver']['connected'])
+        assert get('/api/status')['receiver']['recv_fps'] is None
+        before_restart = stream_count[0]
+        proc=start_main()
         wait(lambda:get('/api/params').get('running',{}).get('dart_color')==1)
         wait(lambda:dart().get('color')=='blue')
+        wait(lambda:stream_count[0] > before_restart + 2)
+        with requests.get(base+'/api/telemetry/stream', params={'after_seq': old_seq}, stream=True, timeout=10) as events:
+            for line in events.iter_lines():
+                if line.startswith(b'data: '):
+                    msg=json.loads(line[6:]); samples=msg.get('samples') or []
+                    if samples:
+                        assert samples[-1]['seq'] < old_seq
+                        break
+            else: raise AssertionError('SSE did not resume after sequence reset')
+        stream.close()
+        print('PASS 视觉进程重启后 MJPEG 与 SSE 序号重置恢复')
         assert post('/api/params',{'cmd':'apply','values':{'dart_color':'red'}})['ok']
         wait(lambda:dart().get('color')=='red')
         print('PASS YAML 保存及重启恢复，颜色 blue；API 支持 red 字符串')

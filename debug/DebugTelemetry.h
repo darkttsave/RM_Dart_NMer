@@ -84,6 +84,8 @@ struct DebugFrame
     // 主循环实测帧率与识别耗时
     double fps = 0.0;
     double processing_time_ms = 0.0;
+    std::optional<double> processing_fps_5s, processing_p95_ms, host_receive_fps, processing_window_s;
+    std::optional<std::uint64_t> processing_window_frames, camera_missing_frames, camera_gap_events;
 
     // 数据来源标识
     std::string source;

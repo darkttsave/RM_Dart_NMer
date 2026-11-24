@@ -27,6 +27,10 @@ class HikCamera::Impl
     CameraConfig _init_mode;         //!< 初始化配置模式
     std::string _serial;             //!< 相机序列号 S/N
     bool _opened{};                  //!< 相机是否打开
+    std::uint64_t _connection_generation{};
+    bool _diagnostics_enabled{};
+    bool _have_previous_frame{};
+    HikFrameDiagnostics _diagnostics{};
     std::chrono::steady_clock::time_point _last_reconnect_try{}; //!< 最近一次重连尝试时间
     std::chrono::steady_clock::time_point _last_read_warn{};      //!< 最近一次读帧失败告警时间
 
@@ -65,6 +69,9 @@ public:
 
     //! 相机是否打开
     inline bool isOpened() const noexcept { return _opened; }
+    inline std::uint64_t connectionGeneration() const noexcept { return _connection_generation; }
+    inline void enableDiagnostics(bool enabled) noexcept { _diagnostics_enabled = enabled; }
+    inline HikFrameDiagnostics diagnostics() const noexcept { return _diagnostics; }
 
     //! 释放相机资源
     void release() noexcept;

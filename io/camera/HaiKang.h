@@ -1,5 +1,7 @@
 // std
 #include <string>
+#include <cstdint>
+#include <chrono>
 
 // cv
 #include <opencv2/opencv.hpp>
@@ -20,6 +22,10 @@ private:
     int gain;
     std::string serial_number;
     rm::HikCamera* cap = nullptr;
+    std::uint64_t applied_generation = 0;
+    int applied_exposure = 0;
+    int applied_gain = 0;
+    std::chrono::steady_clock::time_point last_parameter_warning{};
     
     // 成员函数声明
     void loadCameraConfig();
@@ -32,6 +38,10 @@ public:
     Camera_();
     ~Camera_();
     bool isOpened() const;
+    void enableDiagnostics(bool enabled) { if (cap) cap->enableDiagnostics(enabled); }
+    rm::HikFrameDiagnostics diagnostics() const { return cap ? cap->diagnostics() : rm::HikFrameDiagnostics{}; }
+    double actualExposure() const { return isOpened() ? cap->get(rm::CAMERA_EXPOSURE) : -1; }
+    double actualGain() const { return isOpened() ? cap->get(rm::CAMERA_GAIN) : -1; }
     void getimage(cv::Mat &image);
     void setCameraExposureGain(int exp, int g);
 };

@@ -89,18 +89,9 @@ bool Camera_::createCameraHandle()
 
 bool Camera_::setCameraParameters()
 {
-    if (cap == nullptr || !cap->isOpened()) return false;
-    try
-    {
-        cap->set(rm::CAMERA_MANUAL_EXPOSURE);
-        cap->set(rm::CAMERA_EXPOSURE, exposure);
-        cap->set(rm::CAMERA_GAIN, gain);
-        return true;
-    }
-    catch (const std::exception &)
-    {
-        return false;
-    }
+    setCameraExposureGain(exposure, gain);
+    return cap != nullptr && cap->isOpened() &&
+           applied_generation == cap->connectionGeneration();
 }
 
 bool Camera_::isOpened() const
@@ -115,19 +106,36 @@ void Camera_::setupDebugMode()
 
 void Camera_::getimage(cv::Mat &image)
 {
-    if (cap != nullptr)
-    {
-        cap->read(image);
-    }
+    if (cap == nullptr || !cap->read(image))
+        image.release(); // 失败时不得把上一帧误认为新帧。
 }
 
 void Camera_::setCameraExposureGain(int exp, int g)
 {
-    if (cap == nullptr) return;
+    if (cap == nullptr || !cap->isOpened()) return;
     try
     {
-        cap->set(rm::CAMERA_EXPOSURE, exp);
-        cap->set(rm::CAMERA_GAIN, g);
+        const auto generation = cap->connectionGeneration();
+        if (applied_generation == generation && applied_exposure == exp && applied_gain == g)
+            return;
+        const bool manualOk = applied_generation == generation || cap->set(rm::CAMERA_MANUAL_EXPOSURE);
+        const bool exposureOk = manualOk && cap->set(rm::CAMERA_EXPOSURE, exp);
+        const bool gainOk = cap->set(rm::CAMERA_GAIN, g);
+        if (manualOk && exposureOk && gainOk)
+        {
+            applied_generation = generation;
+            applied_exposure = exp;
+            applied_gain = g;
+            return;
+        }
     }
     catch (const std::exception &) {}
+    // 部分写入也可能改变设备，失效缓存以保证后续完整重试。
+    applied_generation = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_parameter_warning >= std::chrono::seconds(1))
+    {
+        std::cerr << "[Camera] 曝光或增益设置失败，将重试" << std::endl;
+        last_parameter_warning = now;
+    }
 }

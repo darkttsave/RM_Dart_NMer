@@ -28,6 +28,8 @@
 #include "tasks/dart/DartDetector.h"
 #include "tasks/dart/DartTracker.h"
 #include "tools/Utils.h"
+#include "tools/PerformanceStats.h"
+#include "tools/WebPerformanceWindow.h"
 #include "debug/DebugTelemetry.h"
 #include "debug/FrameSource.h"
 #include "debug/Recorder.h"
@@ -72,6 +74,7 @@ struct CliOptions
     std::string recordRoot;        // --record-root: 录制会话根目录（覆盖配置）
     std::string recordImageMode;   // --record-image-mode: 自动录像来源
     int webDebugOverride = -1;     // -1=跟随配置文件, 0=强制关闭, 1=强制开启
+    bool perf = false;
 };
 
 void printUsage(const char *prog)
@@ -90,6 +93,7 @@ void printUsage(const char *prog)
          << "  --record-image-mode <raw|debug> 自动录像来源\n"
          << "  --web-debug         强制启用 Web 调试数据发布（覆盖配置）\n"
          << "  --no-web-debug      强制关闭 Web 调试数据发布（覆盖配置）\n"
+         << "  --perf              每 5 秒输出一次处理阶段性能统计\n"
          << "  -h, --help          显示帮助\n";
 }
 
@@ -121,6 +125,8 @@ CliOptions parseCli(int argc, char **argv)
             opt.webDebugOverride = 1;
         else if (arg == "--no-web-debug")
             opt.webDebugOverride = 0;
+        else if (arg == "--perf")
+            opt.perf = true;
         else if (arg == "-h" || arg == "--help")
         {
             printUsage(argv[0]);
@@ -637,9 +643,35 @@ int main(int argc, char **argv)
     double fpsEma = 0.0;
     uint64_t frameCounter = 0;
     uint64_t appliedDartRevision = 0;
+    PerformanceStats perf(cli.perf);
+    detector.enablePerformanceProfiling(cli.perf);
+    if (cli.perf) cout << "[GreenPerf] G01/G02/G04 合并计入 G03_fused_color" << endl;
+    detector.setDebugRendering(cli.showGui || webDebugEnabled || recordEnabled);
+    if (camera) camera->enableDiagnostics(cli.perf || webDebugEnabled);
+    WebPerformanceWindow webPerformance(PerformanceStats::Clock::now());
+    std::optional<std::uint32_t> lastWebCameraFrame;
+    std::uint64_t lastWebCameraReconnect = 0;
+    auto lastCameraStatsTime = PerformanceStats::Clock::now();
+    std::uint64_t lastReceived = 0;
+    auto printCameraStats = [&]() {
+        if (!camera || !perf.enabled()) return;
+        const auto now = PerformanceStats::Clock::now();
+        const auto d = camera->diagnostics();
+        const double seconds = std::chrono::duration<double>(now - lastCameraStatsTime).count();
+        std::cout << "[Perf] host_receive_fps=" << (seconds > 0 ? (d.received - lastReceived) / seconds : 0)
+                  << " received=" << d.received << " frame=" << d.frame_number
+                  << " device_timestamp_raw=" << d.device_timestamp << " size=" << d.width << "x" << d.height
+                  << " gaps=" << d.gaps << " missed=" << d.missed << " frame_resets=" << d.resets
+                  << " frame_wraps=" << d.frame_wraps << " timestamp_backwards=" << d.timestamp_backwards
+                  << " failures=" << d.failures << " reconnects=" << d.reconnects
+                  << " exposure_us=" << camera->actualExposure() << " gain=" << camera->actualGain() << std::endl;
+        lastCameraStatsTime = now;
+        lastReceived = d.received;
+    };
 
     while (!g_shutdown_requested.load())
     {
+        const auto perfLoopStart = PerformanceStats::Clock::now();
         if (serialWatchdog && !serial.IsSimulated() && !serial.IsOpen())
         {
             cerr << "[Main] Serial port disconnected, exiting for watchdog restart." << endl;
@@ -695,11 +727,28 @@ int main(int argc, char **argv)
         if (camera)
         {
             camera->setCameraExposureGain(exposure, gain);
-            camera->setCameraExposureGain(exposure, gain);
+            const auto captureStart = PerformanceStats::Clock::now();
             camera->getimage(image);
+            if (webDebugEnabled && !image.empty()) {
+                const auto d = camera->diagnostics();
+                if (d.valid && (!lastWebCameraFrame || *lastWebCameraFrame != d.frame_number ||
+                                lastWebCameraReconnect != d.reconnects)) {
+                    webPerformance.received(PerformanceStats::Clock::now());
+                    lastWebCameraFrame = d.frame_number;
+                    lastWebCameraReconnect = d.reconnects;
+                }
+            }
+            perf.add(perf.capture, PerformanceStats::ms(captureStart, PerformanceStats::Clock::now()));
+            if (perf.enabled())
+            {
+                const auto d = camera->diagnostics();
+                if (d.attempted) perf.add(perf.sdk_wait, d.wait_ms);
+                if (d.valid) perf.add(perf.conversion, d.convert_ms);
+            }
         }
         else
         {
+            const auto captureStart = PerformanceStats::Clock::now();
             if (!frameSource->next(image))
             {
                 if (cli.showGui)
@@ -708,9 +757,11 @@ int main(int argc, char **argv)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+            perf.add(perf.capture, PerformanceStats::ms(captureStart, PerformanceStats::Clock::now()));
         }
         if (image.empty())
         {
+            if (perf.flush()) printCameraStats();
             continue;
         }
 
@@ -746,6 +797,7 @@ int main(int argc, char **argv)
         const auto detectEndTime = std::chrono::steady_clock::now();
         const double processingTimeMs =
             std::chrono::duration<double, std::milli>(detectEndTime - frameStartTime).count();
+        perf.add(perf.green, processingTimeMs);
         const int64_t frameTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                              detectEndTime.time_since_epoch())
                                              .count();
@@ -778,6 +830,7 @@ int main(int argc, char **argv)
         }
         dartvision::TrackResult dartResult;
         std::vector<dartvision::Candidate> dartCandidates;
+        const auto overlayStart = PerformanceStats::Clock::now();
         cv::Mat annotatedDebug = detector.getDebugImage();
         double dartProcessingMs = 0.0;
         if (dartEnabled)
@@ -803,6 +856,9 @@ int main(int argc, char **argv)
                             cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 220, 0), 1);
             }
         }
+        if (dartEnabled) perf.add(perf.dart, dartProcessingMs);
+        if (webDebugEnabled) webPerformance.processed(PerformanceStats::Clock::now(), processingTimeMs + dartProcessingMs);
+        perf.add(perf.overlay, std::max(0.0, PerformanceStats::ms(overlayStart, PerformanceStats::Clock::now()) - dartProcessingMs));
         // M3：参数事件记录"生效时最近一帧"的帧号与时间戳（与遥测/视频索引同一时间基准）
         runtimeParams.setFrameContext(frameId, frameTimestampUs);
         {
@@ -880,6 +936,7 @@ int main(int argc, char **argv)
             }
         }
 
+        const auto submitStart = PerformanceStats::Clock::now();
         // M1：发布本帧调试数据（非阻塞；Flask/浏览器未连接时后台线程直接丢弃）
         {
             webdebug::DebugFrame debugFrame;
@@ -918,6 +975,16 @@ int main(int argc, char **argv)
             debugFrame.candidate_count = detector.getCandidateCount();
             debugFrame.fps = fpsEma;
             debugFrame.processing_time_ms = processingTimeMs;
+            debugFrame.processing_fps_5s = webPerformance.processingFps;
+            debugFrame.processing_p95_ms = webPerformance.processingP95Ms;
+            debugFrame.processing_window_s = webPerformance.windowSeconds;
+            debugFrame.processing_window_frames = webPerformance.framesInWindow;
+            if (camera) {
+                const auto d = camera->diagnostics();
+                debugFrame.host_receive_fps = webPerformance.hostFps;
+                debugFrame.camera_missing_frames = d.missed;
+                debugFrame.camera_gap_events = d.gaps;
+            }
             debugFrame.source = webOptions.source;
             debugFrame.source_label = webOptions.source_label;
             debugFrame.mode = webOptions.mode;
@@ -962,6 +1029,7 @@ int main(int argc, char **argv)
             recordFrame.processing_time_ms = processingTimeMs;
             recorder.submitFrame(recordFrame);
         }
+        perf.add(perf.submit, PerformanceStats::ms(submitStart, PerformanceStats::Clock::now()));
 
         if (cli.showGui)
         {
@@ -999,8 +1067,11 @@ int main(int argc, char **argv)
             // 无 GUI 时用 1ms 休眠近似原 waitKey(1) 的节流行为
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        perf.add(perf.loop, PerformanceStats::ms(perfLoopStart, PerformanceStats::Clock::now()));
+        if (perf.flush()) printCameraStats();
     }
 
+    if (perf.flush(true)) printCameraStats();
     recorder.stop();
     telemetry.stop();
     serial.Close();
