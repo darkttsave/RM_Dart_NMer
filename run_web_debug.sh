@@ -36,6 +36,7 @@ REPLAY_PORT="${REPLAY_PORT:-5001}"
 BACKEND_ONLY=0
 REPLAY=0
 RECORD_ONLY=0
+HEADLESS=0
 SESSION_DIR=""
 SESSION_ROOT=""
 
@@ -46,6 +47,8 @@ usage() {
   默认                真实使用（相机 + 串口 + 实时预览；录制由网页手动开始）
   --auto-record       启动即开始录制（可与默认预览模式组合）
   --record-only       无预览录制模式：不启动预览界面/Flask，按配置参数自动录制
+  --headless          不启动 Flask 或 OpenCV 窗口，录像按配置或参数控制
+  --record-image-mode <raw|debug> 自动录像来源（覆盖配置）
   --source <spec>     模拟视频源: synthetic | synthetic:none | image:<path> | video:<path>
   --no-serial         不打开串口（模拟发送）
   --no-gui            无头运行（不创建 OpenCV 窗口）
@@ -87,6 +90,10 @@ while [ "$#" -gt 0 ]; do
             RECORD_ONLY=1
             shift
             ;;
+        --headless)
+            HEADLESS=1
+            shift
+            ;;
         --auto-record)
             ARGS+=("--auto-record")
             shift
@@ -124,6 +131,21 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+if [ "$HEADLESS" -eq 1 ] && { [ "$BACKEND_ONLY" -eq 1 ] || [ "$REPLAY" -eq 1 ]; }; then
+    echo "[run_web_debug] --headless 不能与 --backend-only 或 --replay 同时使用" >&2
+    exit 2
+fi
+
+if [ "$HEADLESS" -eq 1 ] && [ "$RECORD_ONLY" -eq 0 ]; then
+    if [ ! -x "$BUILD_DIR/main" ]; then
+        cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release || exit 1
+        cmake --build "$BUILD_DIR" -j2 || exit 1
+    fi
+    echo "[run_web_debug] 独立运行：无 Flask / OpenCV 窗口"
+    cd "$BUILD_DIR" || exit 1
+    exec ./main "${ARGS[@]}" --no-gui --no-web-debug
+fi
 
 # ---- 0. M2 离线回放模式（独立服务，不启动视觉主程序/实时后端）----
 if [ "$REPLAY" -eq 1 ]; then

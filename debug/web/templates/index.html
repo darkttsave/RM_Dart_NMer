@@ -133,6 +133,25 @@
             </div>
           </section>
 
+          <section class="panel">
+            <div class="panel-head">
+              <h2>飞镖识别<span class="panel-sub">检测与轨迹</span></h2>
+              <button class="btn small" id="dartResetBtn" type="button">重置飞镖跟踪</button>
+            </div>
+            <div class="panel-body">
+              <div class="kv-grid">
+                <div class="kv"><span class="k">识别 / 颜色</span><span class="v" id="dartMode">--</span></div>
+                <div class="kv"><span class="k">跟踪状态</span><span class="v" id="dartState">--</span></div>
+                <div class="kv"><span class="k">中心 x, y</span><span class="v" id="dartCenter">--</span></div>
+                <div class="kv"><span class="k">候选 / 轨迹点</span><span class="v" id="dartCounts">--</span></div>
+                <div class="kv"><span class="k">丢失帧数</span><span class="v" id="dartLost">--</span></div>
+                <div class="kv"><span class="k">识别耗时</span><span class="v" id="dartMs">--</span></div>
+              </div>
+              <div class="note" id="dartReason">失败原因：--</div>
+              <div class="note" id="dartResetMessage" aria-live="polite"></div>
+            </div>
+          </section>
+
           <!-- 目标与偏差 -->
           <section class="panel">
             <div class="panel-head">
@@ -362,6 +381,16 @@ function switchTab(name) {
 $("tabBtnStatus").addEventListener("click", () => switchTab("status"));
 $("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
 $("tabBtnParams").addEventListener("click", () => switchTab("params"));
+$("dartResetBtn").addEventListener("click", async () => {
+  const button = $("dartResetBtn");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/dart/reset", {method:"POST"});
+    const data = await response.json();
+    $("dartResetMessage").textContent = data.ok ? "重置请求已发送，将在下一帧生效" : `重置失败：${data.error || "未知错误"}`;
+  } catch (_) { $("dartResetMessage").textContent = "重置失败：控制口不可用"; }
+  finally { button.disabled = false; }
+});
 
 // ---------------------------------------------------------------------------
 // M4：水平偏差标柱（使用 C++ 实际数据；阈值取 /api/params 的实际运行值）
@@ -799,6 +828,15 @@ function renderPerfNote() {
 
 function renderFrame(f) {
   state.latest = f;
+  const dart = f.dart || {};
+  const dartStates = {waiting:"等待", captured:"捕获", tracking:"跟踪", lost:"暂时丢失", recaptured:"重新捕获", failed:"失败"};
+  $("dartMode").textContent = dart.enabled ? `启用 · ${dart.color === "blue" ? "蓝色" : "红色"}` : "关闭";
+  $("dartState").textContent = dart.enabled ? (dartStates[dart.track_state] || dart.track_state || "--") : "--";
+  $("dartCenter").textContent = dart.detected && dart.center ? `${fmt(dart.center.x, 1)}, ${fmt(dart.center.y, 1)}` : "--";
+  $("dartCounts").textContent = dart.enabled ? `${dart.candidate_count || 0} / ${(dart.track_points || []).length}` : "--";
+  $("dartLost").textContent = dart.enabled ? String(dart.lost_frames || 0) : "--";
+  $("dartMs").textContent = dart.enabled ? `${fmt(dart.processing_ms, 2)} ms` : "--";
+  $("dartReason").textContent = `失败原因：${dart.enabled ? (dart.failure_reason || "无") : "--"}`;
   if (typeof f.seq === "number") state.lastSeq = Math.max(state.lastSeq, f.seq);
 
   // 顶栏 / 视频区
@@ -903,7 +941,12 @@ function updateReceiver(r) {
 
   const showPlaceholder = !connected || stale;
   $("videoPlaceholder").hidden = !showPlaceholder;
-  if (showPlaceholder) updateDevGauge({ detected: false });
+  if (showPlaceholder) {
+    updateDevGauge({ detected: false });
+    for (const id of ["dartMode", "dartState", "dartCenter", "dartCounts", "dartLost", "dartMs"])
+      $(id).textContent = "--";
+    $("dartReason").textContent = "失败原因：--";
+  }
   $("liveBadge").classList.toggle("live", connected && !stale);
   $("liveBadge").textContent = connected && !stale
     ? `● LIVE · ${state.latest ? (state.latest.source || "debug") : "debug"}`
@@ -1089,14 +1132,17 @@ const PARAM_GROUP_META = {
   tracking: { title: "追踪与连续帧判断", sub: "确认 / 丢失 / 跳变" },
   turn: { title: "转向与距离", sub: "转向阈值 / 距离阶段" },
   camera: { title: "相机参数", sub: "每帧下发" },
+  dart: { title: "飞镖识别与跟踪", sub: "应用后即时生效，关键参数改变将重置轨迹" },
 };
-const PARAM_GROUP_ORDER = ["color", "shape", "tracking", "turn", "camera"];
+const PARAM_GROUP_ORDER = ["color", "shape", "tracking", "turn", "camera", "dart"];
 
 function paramFieldDef(name) {
   return paramState.defs.find((d) => d.name === name) || null;
 }
 
-function paramText(value, type) {
+function paramText(value, type, name = "") {
+  if (name === "dart_color") return Number(value) === 1 ? "蓝色" : "红色";
+  if (name === "dart_enabled" || name === "dart_draw_debug") return Number(value) === 1 ? "开启" : "关闭";
   if (type === "int") return String(Math.round(Number(value)));
   return Number(value).toFixed(4).replace(/\.?0+$/, "");
 }
@@ -1142,18 +1188,18 @@ function updateParamToolbar() {
 }
 
 function updateParamRow(row, def, running, saved) {
-  const input = row.querySelector("input.param-input");
+  const input = row.querySelector(".param-input");
   const stateEl = row.querySelector(".param-state");
   if (!input || !stateEl) return;
   const edited = paramState.edited.has(def.name);
-  if (!edited) input.value = paramText(running, def.type);
+  if (!edited) input.value = String(running);
   input.classList.toggle("edited", edited);
   row.classList.toggle("dirty", edited);
   row.classList.toggle("mismatch", Math.abs(running - saved) > 1e-9);
   stateEl.innerHTML =
-    `<span class="run">${paramText(running, def.type)}</span> / ` +
-    `<span class="cfg">${paramText(saved, def.type)}</span>`;
-  stateEl.title = `运行值 ${paramText(running, def.type)} / 配置文件值 ${paramText(saved, def.type)}`;
+    `<span class="run">${paramText(running, def.type, def.name)}</span> / ` +
+    `<span class="cfg">${paramText(saved, def.type, def.name)}</span>`;
+  stateEl.title = `运行值 ${paramText(running, def.type, def.name)} / 配置文件值 ${paramText(saved, def.type, def.name)}`;
 }
 
 function renderParamGroups() {
@@ -1181,8 +1227,12 @@ function renderParamGroups() {
       name.title = `${def.name} · 范围 ${def.min}~${def.max}` +
         (def.unit ? ` ${def.unit}` : "") + (def.hint ? ` · ${def.hint}` : "");
       name.innerHTML = `<b>${def.label}</b><span class="mono">${def.name}</span>`;
-      const input = document.createElement("input");
-      input.type = "number";
+      const isChoice = ["dart_color", "dart_enabled", "dart_draw_debug"].includes(def.name);
+      const input = document.createElement(isChoice ? "select" : "input");
+      if (isChoice) {
+        for (const [value, label] of (def.name === "dart_color" ? [[0, "红色"], [1, "蓝色"]] : [[0, "关闭"], [1, "开启"]]))
+          input.add(new Option(label, value));
+      } else input.type = "number";
       input.className = "param-input";
       input.dataset.name = def.name;
       input.min = def.min;
@@ -1267,7 +1317,7 @@ async function applyParams() {
   if (!paramState.edited.size) return;
   const values = {};
   for (const name of paramState.edited) {
-    const input = document.querySelector(`#paramGroups input[data-name="${name}"]`);
+    const input = document.querySelector(`#paramGroups .param-input[data-name="${name}"]`);
     if (input) values[name] = Number(input.value);
   }
   setParamMessage("正在应用参数…", "");

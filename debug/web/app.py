@@ -365,6 +365,11 @@ def api_params():
     return jsonify({"ok": False, "error": "cmd 必须是 apply / save"}), 400
 
 
+@app.route("/api/dart/reset", methods=["POST"])
+def api_dart_reset():
+    return jsonify(recorder_command("dart.reset", app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)))
+
+
 
 # --------------------------------------------------------------------------
 # M4：机械与电控调试台的数据接口（接口预留；只展示有可信来源的数据）

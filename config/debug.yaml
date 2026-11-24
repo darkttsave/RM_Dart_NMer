@@ -60,7 +60,29 @@ recording:
   enabled: true          # 录制系统总开关（--no-record 可覆盖）
   auto_start: false      # 程序启动不自动录制（预览调试时网页手动开始；无预览录制用 --auto-record 或 ./run_web_debug.sh --record-only）
   root: "recordings"     # 会话根目录（相对项目根），每次录制生成独立子目录
+  record_image_mode: debug # 自动录像来源：debug 或 raw
   video_scale: 1         # 视频缩放：1=调试画面原尺寸（原实现固定 3 倍放大，无信息增益且 IO 大）
   video_fps: 30          # AVI 标称帧率（仅播放器默认速度；真实帧时间以 video_index_001.csv 为准）
   queue_capacity: 64     # 视频帧有界队列（满则丢帧并计入 session.json）
   control_port: 5011     # 本机录制控制口（仅 127.0.0.1；0=禁用），供网页 /api/recorder 转发
+
+# P2-A：飞镖候选与轨迹（初始参数尚未实拍标定；关闭时沿用原有绿灯流程）
+dart_detection:
+  enabled: false
+  draw_debug: true
+  color: red                 # red 或 blue；不自动识别颜色
+  saturation_min: 100        # HSV S/V 下限
+  value_min: 80
+  red_low_max: 10            # 红色 HSV 色相：0..red_low_max 和 red_high_min..179
+  red_high_min: 170
+  blue_hue_min: 90           # 蓝色色相范围
+  blue_hue_max: 135
+  min_area: 20               # 候选轮廓面积（像素²）
+  max_area: 5000
+  min_aspect: 0.15           # 外接矩形宽 / 高
+  max_aspect: 8.0
+  close_kernel: 3            # 闭运算核大小：正奇数
+  max_distance: 120.0        # 最大逐帧关联距离（像素）
+  min_motion: 4.0            # 建立轨迹所需最小移动（像素）
+  max_lost_frames: 5
+  max_track_points: 100

@@ -82,7 +82,7 @@ public:
     void setConfigPath(const std::string &path);
 
     /// 视觉线程：取当前完整运行值快照（一次加锁拷贝，保证同帧一致）
-    Snapshot snapshot() const;
+    Snapshot snapshot(uint64_t *dart_revision = nullptr) const;
 
     /// 已保存到 YAML 的值（启动值 / 最近一次保存值）
     Snapshot savedSnapshot() const;
@@ -136,6 +136,7 @@ private:
     std::vector<ParamDef> defs_;
     Snapshot values_;        // 运行值（权威）
     Snapshot saved_;         // YAML 中的值
+    uint64_t dart_revision_ = 0; // 会改变飞镖跟踪语义的参数版本
     std::string config_path_;
     std::function<void(const ParamChangeEvent &)> sink_;
     std::atomic<uint64_t> frame_id_{0};

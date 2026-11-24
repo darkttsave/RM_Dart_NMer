@@ -25,6 +25,8 @@
 #include "io/camera/HaiKang.h"
 #include "io/serial/VirtualSerial.h"
 #include "tasks/dart/GreenDetect.h"
+#include "tasks/dart/DartDetector.h"
+#include "tasks/dart/DartTracker.h"
 #include "tools/Utils.h"
 #include "debug/DebugTelemetry.h"
 #include "debug/FrameSource.h"
@@ -68,6 +70,7 @@ struct CliOptions
     bool recordEnabled = true;     // --record / --no-record: 录制系统开关（覆盖配置）
     int autoRecordOverride = -1;   // -1=跟随配置, 0=不自动录制, 1=启动即录制（覆盖配置）
     std::string recordRoot;        // --record-root: 录制会话根目录（覆盖配置）
+    std::string recordImageMode;   // --record-image-mode: 自动录像来源
     int webDebugOverride = -1;     // -1=跟随配置文件, 0=强制关闭, 1=强制开启
 };
 
@@ -84,6 +87,7 @@ void printUsage(const char *prog)
          << "  --auto-record       程序启动即开始录制（覆盖配置 recording.auto_start）\n"
          << "  --no-auto-record    程序启动不自动录制（预览调试时手动开始，覆盖配置）\n"
          << "  --record-root <dir> 指定录制会话根目录（覆盖配置 recording.root）\n"
+         << "  --record-image-mode <raw|debug> 自动录像来源\n"
          << "  --web-debug         强制启用 Web 调试数据发布（覆盖配置）\n"
          << "  --no-web-debug      强制关闭 Web 调试数据发布（覆盖配置）\n"
          << "  -h, --help          显示帮助\n";
@@ -111,6 +115,8 @@ CliOptions parseCli(int argc, char **argv)
             opt.autoRecordOverride = 0;
         else if (arg == "--record-root" && i + 1 < argc)
             opt.recordRoot = argv[++i];
+        else if (arg == "--record-image-mode" && i + 1 < argc)
+            opt.recordImageMode = argv[++i];
         else if (arg == "--web-debug")
             opt.webDebugOverride = 1;
         else if (arg == "--no-web-debug")
@@ -158,6 +164,9 @@ int main(int argc, char **argv)
     int kernelSize = 5;
     int openIterations = 1;
     int closeIterations = 1;
+    bool dartEnabled = false, dartAnnotate = true;
+    dartvision::DetectorConfig dartDetectorConfig;
+    dartvision::TrackerConfig dartTrackerConfig;
     std::string loadedConfigPath;
 
     // Web 调试数据发布配置（config/debug.yaml 的 web_debug 段，可被命令行覆盖）
@@ -172,6 +181,7 @@ int main(int argc, char **argv)
     bool recordEnabled = true;
     bool recordAutoStart = true;
     std::string recordRoot = "recordings";
+    std::string recordImageMode = "debug";
     int recordVideoScale = 1;
     double recordVideoFps = 30.0;
     int recordQueueCapacity = 64;
@@ -204,6 +214,53 @@ int main(int argc, char **argv)
         if (!loaded)
         {
             throw std::runtime_error("配置文件加载失败");
+        }
+
+        if (config["dart_detection"])
+        {
+            try
+            {
+                const auto d = config["dart_detection"];
+                if (d["enabled"]) dartEnabled = d["enabled"].as<bool>();
+                if (d["draw_debug"]) dartAnnotate = d["draw_debug"].as<bool>();
+                if (d["color"]) dartDetectorConfig.color = d["color"].as<std::string>();
+                if (d["saturation_min"]) dartDetectorConfig.saturation_min = d["saturation_min"].as<int>();
+                if (d["value_min"]) dartDetectorConfig.value_min = d["value_min"].as<int>();
+                if (d["red_low_max"]) dartDetectorConfig.red_low_max = d["red_low_max"].as<int>();
+                if (d["red_high_min"]) dartDetectorConfig.red_high_min = d["red_high_min"].as<int>();
+                if (d["blue_hue_min"]) dartDetectorConfig.blue_hue_min = d["blue_hue_min"].as<int>();
+                if (d["blue_hue_max"]) dartDetectorConfig.blue_hue_max = d["blue_hue_max"].as<int>();
+                if (d["min_area"]) dartDetectorConfig.min_area = d["min_area"].as<double>();
+                if (d["max_area"]) dartDetectorConfig.max_area = d["max_area"].as<double>();
+                if (d["min_aspect"]) dartDetectorConfig.min_aspect = d["min_aspect"].as<double>();
+                if (d["max_aspect"]) dartDetectorConfig.max_aspect = d["max_aspect"].as<double>();
+                if (d["close_kernel"]) dartDetectorConfig.close_kernel = d["close_kernel"].as<int>();
+                if (d["max_distance"]) dartTrackerConfig.max_distance = d["max_distance"].as<double>();
+                if (d["min_motion"]) dartTrackerConfig.min_motion = d["min_motion"].as<double>();
+                if (d["max_lost_frames"]) dartTrackerConfig.max_lost_frames = d["max_lost_frames"].as<int>();
+                if (d["max_track_points"]) dartTrackerConfig.max_points = d["max_track_points"].as<int>();
+                const auto &c = dartDetectorConfig;
+                if ((c.color != "red" && c.color != "blue") || c.saturation_min < 0 || c.saturation_min > 255 ||
+                    c.value_min < 0 || c.value_min > 255 || c.red_low_max < 0 || c.red_low_max > 179 ||
+                    c.red_high_min < 0 || c.red_high_min > 179 || c.red_low_max >= c.red_high_min ||
+                    c.blue_hue_min < 0 || c.blue_hue_max > 179 || c.blue_hue_min > c.blue_hue_max ||
+                    !std::isfinite(c.min_area) || !std::isfinite(c.max_area) || c.min_area < 0 || c.max_area < c.min_area ||
+                    !std::isfinite(c.min_aspect) || !std::isfinite(c.max_aspect) || c.min_aspect <= 0 || c.max_aspect < c.min_aspect ||
+                    c.close_kernel < 1 || c.close_kernel > 31 || c.close_kernel % 2 == 0 ||
+                    !std::isfinite(dartTrackerConfig.max_distance) || !std::isfinite(dartTrackerConfig.min_motion) ||
+                    dartTrackerConfig.min_motion <= 0 || dartTrackerConfig.max_distance < dartTrackerConfig.min_motion ||
+                    dartTrackerConfig.max_lost_frames < 0 || dartTrackerConfig.max_lost_frames > 1000 ||
+                    dartTrackerConfig.max_points < 2 || dartTrackerConfig.max_points > 1000)
+                    throw std::runtime_error("飞镖检测参数无效或超出范围");
+            }
+            catch (const std::exception &e)
+            {
+                dartEnabled = false;
+                dartDetectorConfig = dartvision::DetectorConfig{};
+                dartTrackerConfig = dartvision::TrackerConfig{};
+                dartAnnotate = true;
+                cerr << "[Dart] 配置无效，已关闭飞镖检测: " << e.what() << endl;
+            }
         }
 
         if (config["turn_control"] && config["turn_control"]["turn_threshold"])
@@ -265,6 +322,8 @@ int main(int argc, char **argv)
                 recordAutoStart = rc["auto_start"].as<bool>();
             if (rc["root"])
                 recordRoot = rc["root"].as<std::string>();
+            if (rc["record_image_mode"])
+                recordImageMode = rc["record_image_mode"].as<std::string>();
             if (rc["video_scale"])
                 recordVideoScale = rc["video_scale"].as<int>();
             if (rc["video_fps"])
@@ -344,6 +403,24 @@ int main(int argc, char **argv)
             {"dist_near_thresh", distNearThresh},
             {"exposure", static_cast<double>(exposure)},
             {"gain", static_cast<double>(gain)},
+            {"dart_enabled", static_cast<double>(dartEnabled)},
+            {"dart_color", static_cast<double>(dartDetectorConfig.color == "blue")},
+            {"dart_draw_debug", static_cast<double>(dartAnnotate)},
+            {"dart_saturation_min", static_cast<double>(dartDetectorConfig.saturation_min)},
+            {"dart_value_min", static_cast<double>(dartDetectorConfig.value_min)},
+            {"dart_red_low_max", static_cast<double>(dartDetectorConfig.red_low_max)},
+            {"dart_red_high_min", static_cast<double>(dartDetectorConfig.red_high_min)},
+            {"dart_blue_hue_min", static_cast<double>(dartDetectorConfig.blue_hue_min)},
+            {"dart_blue_hue_max", static_cast<double>(dartDetectorConfig.blue_hue_max)},
+            {"dart_min_area", static_cast<double>(dartDetectorConfig.min_area)},
+            {"dart_max_area", static_cast<double>(dartDetectorConfig.max_area)},
+            {"dart_min_aspect", static_cast<double>(dartDetectorConfig.min_aspect)},
+            {"dart_max_aspect", static_cast<double>(dartDetectorConfig.max_aspect)},
+            {"dart_close_kernel", static_cast<double>(dartDetectorConfig.close_kernel)},
+            {"dart_max_distance", static_cast<double>(dartTrackerConfig.max_distance)},
+            {"dart_min_motion", static_cast<double>(dartTrackerConfig.min_motion)},
+            {"dart_max_lost_frames", static_cast<double>(dartTrackerConfig.max_lost_frames)},
+            {"dart_max_track_points", static_cast<double>(dartTrackerConfig.max_points)},
         };
         runtimeParams.initialize(initial);
         if (!loadedConfigPath.empty())
@@ -402,6 +479,8 @@ int main(int argc, char **argv)
 
     // 2. 初始化绿灯识别
     GreenDetect detector;
+    dartvision::DartDetector dartDetector(dartDetectorConfig);
+    dartvision::DartTracker dartTracker(dartTrackerConfig);
     detector.setTurnThreshold(turnThreshold);
     detector.setDistanceThresholds(distFarThresh, distNearThresh);
 
@@ -505,6 +584,11 @@ int main(int argc, char **argv)
         recordAutoStart = (cli.autoRecordOverride == 1);
     if (!cli.recordRoot.empty())
         recordRoot = cli.recordRoot;
+    if (!cli.recordImageMode.empty()) recordImageMode = cli.recordImageMode;
+    if (recordImageMode != "raw" && recordImageMode != "debug") {
+        cerr << "[Recorder] record_image_mode 必须是 raw 或 debug" << endl;
+        return 2;
+    }
 
     webdebug::RecordOptions recordOptions;
     recordOptions.enabled = recordEnabled;
@@ -522,11 +606,14 @@ int main(int argc, char **argv)
     recordOptions.source = webOptions.source;
     recordOptions.source_label = webOptions.source_label;
     recordOptions.mode = webOptions.mode;
+    recordOptions.record_image_mode = recordImageMode;
     recordOptions.config_path = std::filesystem::absolute(loadedConfigPath).string();
     // 启动时快照仅作回退；实际每个录制会话开始时由 Recorder 从 RuntimeParams 取当前值
     recordOptions.runtime_params_json = runtimeParams.runningJson();
     recordOptions.app_version = "DART-WEB-M3 (base M2 commit 9adb3f0)";
+    std::atomic<unsigned> dartResetRequests{0};
     webdebug::Recorder recorder;
+    recorder.setDartResetRequest([&dartResetRequests]() { dartResetRequests.fetch_add(1); });
     recorder.setRuntimeParams(&runtimeParams);
     // 参数实际生效 -> 若正在录制则追加 events.jsonl（未录制时不写事件，只更新运行参数）
     runtimeParams.setEventSink([&recorder](const webdebug::ParamChangeEvent &event) {
@@ -549,6 +636,7 @@ int main(int argc, char **argv)
     auto lastFrameTime = std::chrono::steady_clock::now();
     double fpsEma = 0.0;
     uint64_t frameCounter = 0;
+    uint64_t appliedDartRevision = 0;
 
     while (!g_shutdown_requested.load())
     {
@@ -578,7 +666,8 @@ int main(int argc, char **argv)
         }
 
         // M3（2/3）：每帧取一次完整参数快照，保证同一帧处理过程中参数一致
-        const webdebug::RuntimeParams::Snapshot runtimeSnapshot = runtimeParams.snapshot();
+        uint64_t dartRevision = 0;
+        const webdebug::RuntimeParams::Snapshot runtimeSnapshot = runtimeParams.snapshot(&dartRevision);
         auto runtimeValue = [&runtimeSnapshot](const char *name) -> double {
             auto it = runtimeSnapshot.find(name);
             return (it == runtimeSnapshot.end()) ? 0.0 : it->second;
@@ -661,6 +750,59 @@ int main(int argc, char **argv)
                                              detectEndTime.time_since_epoch())
                                              .count();
         const uint64_t frameId = ++frameCounter;
+        const bool resetDart = dartRevision != appliedDartRevision;
+        appliedDartRevision = dartRevision;
+        dartEnabled = runtimeValue("dart_enabled") != 0;
+        dartAnnotate = runtimeValue("dart_draw_debug") != 0;
+        dartDetectorConfig.color = runtimeValue("dart_color") == 1 ? "blue" : "red";
+        dartDetectorConfig.saturation_min = static_cast<int>(runtimeValue("dart_saturation_min"));
+        dartDetectorConfig.value_min = static_cast<int>(runtimeValue("dart_value_min"));
+        dartDetectorConfig.red_low_max = static_cast<int>(runtimeValue("dart_red_low_max"));
+        dartDetectorConfig.red_high_min = static_cast<int>(runtimeValue("dart_red_high_min"));
+        dartDetectorConfig.blue_hue_min = static_cast<int>(runtimeValue("dart_blue_hue_min"));
+        dartDetectorConfig.blue_hue_max = static_cast<int>(runtimeValue("dart_blue_hue_max"));
+        dartDetectorConfig.min_area = runtimeValue("dart_min_area");
+        dartDetectorConfig.max_area = runtimeValue("dart_max_area");
+        dartDetectorConfig.min_aspect = runtimeValue("dart_min_aspect");
+        dartDetectorConfig.max_aspect = runtimeValue("dart_max_aspect");
+        dartDetectorConfig.close_kernel = static_cast<int>(runtimeValue("dart_close_kernel"));
+        dartTrackerConfig.max_distance = runtimeValue("dart_max_distance");
+        dartTrackerConfig.min_motion = runtimeValue("dart_min_motion");
+        dartTrackerConfig.max_lost_frames = static_cast<int>(runtimeValue("dart_max_lost_frames"));
+        dartTrackerConfig.max_points = static_cast<int>(runtimeValue("dart_max_track_points"));
+        dartDetector = dartvision::DartDetector(dartDetectorConfig);
+        if (resetDart) dartTracker = dartvision::DartTracker(dartTrackerConfig);
+        const auto manualResets = dartResetRequests.exchange(0);
+        if (manualResets) {
+            dartTracker.reset();
+        }
+        dartvision::TrackResult dartResult;
+        std::vector<dartvision::Candidate> dartCandidates;
+        cv::Mat annotatedDebug = detector.getDebugImage();
+        double dartProcessingMs = 0.0;
+        if (dartEnabled)
+        {
+            const auto dartStart = std::chrono::steady_clock::now();
+            if (frameSource && frameSource->looped()) dartTracker.reset();
+            dartCandidates = dartDetector.detect(image);
+            dartResult = dartTracker.update(dartCandidates, frameId, frameTimestampUs,
+                                             frameSource ? frameSource->sourceTimeMs() : std::nullopt);
+            dartProcessingMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dartStart).count();
+            if (dartAnnotate && !annotatedDebug.empty())
+            {
+                annotatedDebug = annotatedDebug.clone();
+                for (const auto &candidate : dartCandidates)
+                    cv::rectangle(annotatedDebug, candidate.bbox, cv::Scalar(180, 120, 30), 1);
+                if (dartResult.bbox)
+                    cv::rectangle(annotatedDebug, *dartResult.bbox, cv::Scalar(0, 255, 255), 2);
+                for (std::size_t i = 1; i < dartResult.track_points.size(); ++i)
+                    cv::line(annotatedDebug, dartResult.track_points[i-1].center,
+                             dartResult.track_points[i].center, cv::Scalar(255, 220, 0), 2);
+                cv::putText(annotatedDebug, "Dart: " + dartResult.track_state + " (" +
+                            dartResult.failure_reason + ")", cv::Point(10, 90),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 220, 0), 1);
+            }
+        }
         // M3：参数事件记录"生效时最近一帧"的帧号与时间戳（与遥测/视频索引同一时间基准）
         runtimeParams.setFrameContext(frameId, frameTimestampUs);
         {
@@ -741,7 +883,17 @@ int main(int argc, char **argv)
         // M1：发布本帧调试数据（非阻塞；Flask/浏览器未连接时后台线程直接丢弃）
         {
             webdebug::DebugFrame debugFrame;
-            debugFrame.image = detector.getDebugImage();
+            debugFrame.image = annotatedDebug;
+            debugFrame.dart_enabled = dartEnabled;
+            debugFrame.dart_color = dartDetectorConfig.color;
+            debugFrame.dart_processing_ms = dartProcessingMs;
+            debugFrame.dart_frame_id = frameId;
+            debugFrame.dart_timestamp_us = frameTimestampUs;
+            debugFrame.dart_source_time_ms = dartEnabled && frameSource ? frameSource->sourceTimeMs() : std::nullopt;
+            debugFrame.dart_result = dartResult;
+            // 限制单帧网络诊断体积；candidate_count 仍保留完整数量。
+            debugFrame.dart_candidates.assign(dartCandidates.begin(), dartCandidates.begin() +
+                std::min<std::size_t>(dartCandidates.size(), 128));
             debugFrame.detected = target.detected;
             debugFrame.target_x = target.center.x;
             debugFrame.target_y = target.center.y;
@@ -775,8 +927,11 @@ int main(int argc, char **argv)
         // M2：录制本帧（逐帧遥测 CSV 直接写；视频帧进入有界队列由后台线程编码落盘）
         {
             webdebug::RecordFrame recordFrame;
-            recordFrame.image = detector.getDebugImage();
+            recordFrame.image = annotatedDebug;
             recordFrame.raw_image = image;
+            recordFrame.dart_enabled = dartEnabled;
+            recordFrame.dart_result = dartResult;
+            recordFrame.dart_processing_ms = dartProcessingMs;
             recordFrame.frame_id = frameId;
             recordFrame.timestamp_us = frameTimestampUs;
             recordFrame.detected = target.detected;
@@ -812,7 +967,7 @@ int main(int argc, char **argv)
         {
             if (target.detected)
             {
-                Mat debugImage = detector.getDebugImage();
+                Mat debugImage = annotatedDebug;
                 resize(debugImage, resizedImage, displaySize);
                 resize(debugImage, displayImage, resultSize, 0, 0, INTER_NEAREST);
 
@@ -821,7 +976,7 @@ int main(int argc, char **argv)
             }
             else
             {
-                Mat debugImage = detector.getDebugImage();
+                Mat debugImage = annotatedDebug;
                 if (debugImage.empty())
                     debugImage = image;
                 resize(debugImage, resizedImage, displaySize);

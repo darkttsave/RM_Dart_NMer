@@ -37,6 +37,7 @@
 #include <opencv2/videoio.hpp>
 
 #include "RuntimeParams.h"
+#include "tasks/dart/DartTracker.h"
 
 namespace webdebug
 {
@@ -74,6 +75,9 @@ struct RecordFrame
     int candidate_count = 0;
     double fps = 0.0;
     double processing_time_ms = 0.0;
+    bool dart_enabled = false;
+    dartvision::TrackResult dart_result;
+    double dart_processing_ms = 0.0;
 };
 
 /// 录制配置（来自 config/debug.yaml 的 recording 段，可被命令行覆盖）
@@ -90,6 +94,7 @@ struct RecordOptions
     std::string source;              // 图像来源标识
     std::string source_label;
     std::string mode = "run";
+    std::string record_image_mode = "debug";
     std::string config_path;         // config/debug.yaml 路径（用于快照）
     std::string runtime_params_json; // 运行时实际生效参数（JSON 对象字符串）
     std::string app_version;         // 版本/Commit 标识
@@ -127,6 +132,8 @@ public:
 
     /// M3：绑定运行时参数服务（控制口 params 命令 + 录制快照）
     void setRuntimeParams(RuntimeParams *params) { runtime_params_ = params; }
+    void setDartResetRequest(std::function<void()> callback) { dart_reset_request_ = std::move(callback); }
+    void appendDartReset();
 
     /// M3：参数修改生效时追加一条事件到 events.jsonl（未录制时忽略）
     void appendParameterEvent(const ParamChangeEvent &event);
@@ -209,6 +216,7 @@ private:
 
     // 参数事件（M3）：events.jsonl 追加写入
     RuntimeParams *runtime_params_ = nullptr;
+    std::function<void()> dart_reset_request_;
     std::mutex events_mutex_;
     std::ofstream events_file_;
     std::string events_path_;

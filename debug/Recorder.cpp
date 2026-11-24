@@ -43,7 +43,9 @@ constexpr const char *kTelemetryHeader =
     "image_width,image_height,image_center_x,image_center_y,offset_x,offset_y,"
     "turn_flag,distance_flag,clear_flag,tx_sent,tx_turn_flag,tx_distance_flag,tx_clear_flag,"
     "lock_frames,required_frames,lost_frames,required_lost_frames,"
-    "green_pixels,candidate_count,fps,processing_time_ms\n";
+    "green_pixels,candidate_count,fps,processing_time_ms,"
+    "dart_enabled,dart_detected,dart_center_x,dart_center_y,dart_candidate_count,"
+    "dart_track_valid,dart_track_state,dart_lost_frames,dart_failure_reason,dart_processing_ms\n";
 
 constexpr const char *kVideoIndexHeader =
     "video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us\n";
@@ -212,7 +214,7 @@ void Recorder::start()
 
     // 自动会话先完成初始化，避免控制线程同时启动第二个会话。
     if (options_.auto_start)
-        startSession("auto_start");
+        startSession("auto_start", options_.record_image_mode);
 
     if (options_.control_port > 0)
     {
@@ -565,6 +567,16 @@ void Recorder::submitFrame(const RecordFrame &frame)
     {
         const int len = std::min<int>(n, static_cast<int>(sizeof(line)) - 1);
         std::string row(line, static_cast<std::size_t>(len));
+        if (!row.empty() && row.back() == '\n') row.pop_back();
+        std::ostringstream dart;
+        dart << ',' << (frame.dart_enabled ? 1 : 0) << ',' << (frame.dart_result.detected ? 1 : 0) << ',';
+        if (frame.dart_result.center) dart << frame.dart_result.center->x;
+        dart << ',';
+        if (frame.dart_result.center) dart << frame.dart_result.center->y;
+        dart << ',' << frame.dart_result.candidate_count << ',' << (frame.dart_result.track_valid ? 1 : 0)
+             << ',' << frame.dart_result.track_state << ',' << frame.dart_result.lost_frames
+             << ',' << frame.dart_result.failure_reason << ',' << frame.dart_processing_ms << '\n';
+        row += dart.str();
         {
             std::lock_guard<std::mutex> lk(telemetry_mutex_);
             if (!telemetry_stop_ &&
@@ -990,6 +1002,18 @@ bool Recorder::appendManualNote(const std::string &note)
     return true;
 }
 
+void Recorder::appendDartReset()
+{
+    std::lock_guard<std::mutex> session_lock(session_mutex_);
+    if (!recording_.load()) return;
+    const auto elapsed = std::max<int64_t>(0, last_timestamp_us_.load() - session_start_us_);
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (!events_file_.is_open()) return;
+    events_file_ << "{\"type\":\"dart_tracker_reset\",\"source\":\"web\",\"result\":\"requested\",\"frame_id\":"
+                 << last_frame_id_.load() << ",\"elapsed_us\":" << elapsed << "}\n";
+    events_file_.flush();
+}
+
 std::string Recorder::statusJson() const
 {
     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -1093,6 +1117,11 @@ void Recorder::controlLoop()
             {
                 stopSession("web_control");
                 response = statusJson();
+            }
+            else if (cmd == "dart.reset")
+            {
+                if (!dart_reset_request_) response = "{\"ok\":false,\"error\":\"飞镖跟踪器不可用\"}";
+                else { dart_reset_request_(); appendDartReset(); response = "{\"ok\":true,\"pending\":true}"; }
             }
             else if (cmd == "params")
             {

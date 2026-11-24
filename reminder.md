@@ -23,3 +23,12 @@ cmake -S . -B build && cmake --build build -j2
 ./build/camera_test                 # 无界面采集并输出帧率
 ./build/camera_test --display --frames=0 # 持续预览，按 q 或 Esc 退出
 ```
+
+独立运行（无 Flask 和 OpenCV 窗口）：
+
+```bash
+./run_web_debug.sh --headless --source synthetic --no-serial
+./run_web_debug.sh --headless --source synthetic --no-serial --auto-record --record-image-mode raw
+```
+
+Web 的「参数调整」包含飞镖参数，状态面板可重置飞镖跟踪。自动录像的默认来源由 `recording.record_image_mode` 配置。

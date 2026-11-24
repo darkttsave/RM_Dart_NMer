@@ -16,6 +16,7 @@
 #define WEB_DEBUG_FRAME_SOURCE_H
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <opencv2/core.hpp>
@@ -30,6 +31,11 @@ public:
 
     /// 取下一帧；返回 false 表示源不可用（主循环应跳过本帧）
     virtual bool next(cv::Mat &out) = 0;
+
+    /// 本次读取是否从视频末尾回绕到开头；其他帧源始终为 false。
+    virtual bool looped() const { return false; }
+    /// 视频源提供的媒体时间（毫秒），并非相机硬件时间或处理耗时。
+    virtual std::optional<double> sourceTimeMs() const { return std::nullopt; }
 
     /// 数据来源标识（写入调试数据 source 字段），如 "synthetic" / "sim_image"
     virtual const std::string &sourceKind() const = 0;

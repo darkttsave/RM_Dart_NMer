@@ -825,9 +825,8 @@ function renderEvents() {
   const events = state.events || [];
   if (meta) {
     const manualCount = events.filter((e) => e.type === "manual_note").length;
-    meta.textContent = manualCount > 0
-      ? `${events.length} 条（参数 ${events.length - manualCount} · 人工 ${manualCount}）`
-      : `${events.length} 条`;
+    const resetCount = events.filter((e) => e.type === "dart_tracker_reset").length;
+    meta.textContent = `${events.length} 条（参数 ${events.length - manualCount - resetCount} · 人工 ${manualCount} · 重置 ${resetCount}）`;
   }
   if (!list) return;
   if (!events.length) {
@@ -851,6 +850,11 @@ function renderEvents() {
         `<span class="event-param"><b>人工记录</b><small>${esc(ev.note)}</small></span>` +
         `<span class="event-source">人工</span>` +
         `<span class="event-result ok">${esc(ev.result || "recorded")}</span>`;
+    } else if (ev.type === "dart_tracker_reset") {
+      btn.title = `飞镖跟踪重置请求（frame ${ev.frame_id}）`;
+      btn.innerHTML = `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
+        `<span class="event-param"><b>飞镖跟踪重置</b><small>下一帧生效</small></span>` +
+        `<span class="event-source">网页</span><span class="event-result ok">已请求</span>`;
     } else {
       const label = PARAM_LABELS[ev.parameter] || ev.parameter;
       const source = PARAM_SOURCE_LABELS[ev.source] || ev.source || "--";

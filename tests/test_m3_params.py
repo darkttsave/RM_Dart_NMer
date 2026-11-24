@@ -59,7 +59,7 @@ def main():
     running = data.get("running", {})
     saved = data.get("saved", {})
     params = data.get("params", [])
-    check("参数数量完整", len(running) == 20 and len(params) == 20,
+    check("参数数量完整", len(running) >= 20 and len(params) == len(running),
           f"running={len(running)} params={len(params)}")
     required_fields = {"name", "label", "unit", "group", "type", "min", "max", "hot",
                        "web_editable", "hint"}

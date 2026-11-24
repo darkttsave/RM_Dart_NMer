@@ -27,7 +27,7 @@ add_library(dart_io STATIC
 target_include_directories(dart_io PUBLIC ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/camera/include ${HIK_SDK_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(dart_io PUBLIC ${OpenCV_LIBS} yaml-cpp ${HIK_SDK_LIBRARY})
 
-add_library(dart_vision STATIC tasks/dart/GreenDetect.cpp)
+add_library(dart_vision STATIC tasks/dart/GreenDetect.cpp tasks/dart/DartDetector.cpp tasks/dart/DartTracker.cpp)
 target_include_directories(dart_vision PUBLIC ${PROJECT_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(dart_vision PUBLIC ${OpenCV_LIBS} yaml-cpp)
 
@@ -50,3 +50,6 @@ target_link_libraries(test_green_detect PRIVATE dart_vision)
 add_executable(camera_test tests/camera_test.cpp)
 target_link_libraries(camera_test PRIVATE dart_io)
 set_target_properties(camera_test PROPERTIES BUILD_RPATH "${HIK_SDK_LIB_DIR}")
+
+add_executable(test_dart_tracking tests/test_dart_tracking.cpp)
+target_link_libraries(test_dart_tracking PRIVATE dart_vision dart_debug)

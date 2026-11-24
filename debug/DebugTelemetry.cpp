@@ -393,6 +393,44 @@ bool DebugTelemetry::sendFrame(const DebugFrame &frame)
     oss << "\"required_lost_frames\":" << frame.required_lost_frames << ',';
     oss << "\"green_pixels\":" << frame.green_pixels << ',';
     oss << "\"candidate_count\":" << frame.candidate_count << ',';
+    const auto &dart = frame.dart_result;
+    oss << "\"dart\":{\"enabled\":" << (frame.dart_enabled ? "true" : "false")
+        << ",\"color\":\"" << jsonEscape(frame.dart_color) << "\",\"processing_ms\":" << frame.dart_processing_ms
+        << ",\"frame_id\":" << frame.dart_frame_id
+        << ",\"timestamp_us\":" << frame.dart_timestamp_us << ",\"source_time_ms\":";
+    if (frame.dart_source_time_ms) oss << *frame.dart_source_time_ms; else oss << "null";
+    oss << ",\"detected\":" << (dart.detected ? "true" : "false") << ",\"center\":";
+    if (dart.center) oss << "{\"x\":" << dart.center->x << ",\"y\":" << dart.center->y << "}";
+    else oss << "null";
+    oss << ",\"bbox\":";
+    if (dart.bbox) oss << "{\"x\":" << dart.bbox->x << ",\"y\":" << dart.bbox->y
+                       << ",\"width\":" << dart.bbox->width << ",\"height\":" << dart.bbox->height << "}";
+    else oss << "null";
+    oss << ",\"candidate_count\":" << dart.candidate_count
+        << ",\"track_valid\":" << (dart.track_valid ? "true" : "false")
+        << ",\"lost_frames\":" << dart.lost_frames
+        << ",\"track_state\":\"" << jsonEscape(dart.track_state)
+        << "\",\"failure_reason\":\"" << jsonEscape(dart.failure_reason)
+        << "\",\"candidates_truncated\":"
+        << (dart.candidate_count > static_cast<int>(frame.dart_candidates.size()) ? "true" : "false")
+        << ",\"candidates\":[";
+    for (std::size_t i = 0; i < frame.dart_candidates.size(); ++i) {
+        const auto &c = frame.dart_candidates[i];
+        if (i) oss << ',';
+        oss << "{\"x\":" << c.bbox.x << ",\"y\":" << c.bbox.y
+            << ",\"width\":" << c.bbox.width << ",\"height\":" << c.bbox.height
+            << ",\"area\":" << c.area << "}";
+    }
+    oss << "],\"track_points\":[";
+    for (std::size_t i = 0; i < dart.track_points.size(); ++i) {
+        const auto &p = dart.track_points[i];
+        if (i) oss << ',';
+        oss << "{\"frame_id\":" << p.frame_id << ",\"timestamp_us\":" << p.timestamp_us
+            << ",\"source_time_ms\":";
+        if (p.source_time_ms) oss << *p.source_time_ms; else oss << "null";
+        oss << ",\"x\":" << p.center.x << ",\"y\":" << p.center.y << "}";
+    }
+    oss << "]},";
     oss << "\"jpeg_bytes\":" << jpeg.size();
     oss << '}';
     const std::string json = oss.str();

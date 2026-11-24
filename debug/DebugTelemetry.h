@@ -31,6 +31,7 @@
 #include <thread>
 
 #include <opencv2/core.hpp>
+#include "tasks/dart/DartTracker.h"
 
 namespace webdebug
 {
@@ -40,6 +41,14 @@ struct DebugFrame
 {
     // 调试图（带识别标注，来自 GreenDetect::getDebugImage()）
     cv::Mat image;
+    bool dart_enabled = false;
+    std::string dart_color = "red";
+    double dart_processing_ms = 0.0;
+    uint64_t dart_frame_id = 0;
+    int64_t dart_timestamp_us = 0;
+    std::optional<double> dart_source_time_ms;
+    dartvision::TrackResult dart_result;
+    std::vector<dartvision::Candidate> dart_candidates;
 
     // 识别结果（GreenDetect::TargetInfo）
     bool detected = false;

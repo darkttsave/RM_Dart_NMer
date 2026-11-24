@@ -290,7 +290,14 @@ bool parseFlatJsonObject(const std::string &json, std::map<std::string, double> 
             }
         }
         double value = 0.0;
-        if (valueText == "true")
+        if (key == "dart_color" && !isString && (valueText == "true" || valueText == "false"))
+        {
+            *error = "dart_color 必须为 red、blue、0 或 1";
+            return false;
+        }
+        if (key == "dart_color" && isString && (valueText == "red" || valueText == "blue"))
+            value = valueText == "blue" ? 1.0 : 0.0;
+        else if (valueText == "true")
             value = 1.0;
         else if (valueText == "false")
             value = 0.0;
@@ -299,7 +306,6 @@ bool parseFlatJsonObject(const std::string &json, std::map<std::string, double> 
             *error = "参数 " + key + " 的值不是数字: " + valueText;
             return false;
         }
-        (void)isString;
         (*out)[key] = value;
 
         skipWs();
@@ -394,6 +400,26 @@ RuntimeParams::RuntimeParams()
     add("exposure", "曝光", "us", "camera", "camera", "exposure", true, 10, 1000000,
         "手动曝光时间（每帧下发）");
     add("gain", "增益", "", "camera", "camera", "gain", true, 0, 100, "模拟增益（每帧下发）");
+
+    // P2-B: 飞镖参数采用 dart_ 前缀，避免与绿灯参数同名。颜色为 0=红，1=蓝。
+    add("dart_enabled", "飞镖检测", "", "dart", "dart_detection", "enabled", true, 0, 1, "飞镖检测参数");
+    add("dart_color", "飞镖颜色", "", "dart", "dart_detection", "color", true, 0, 1, "0=红，1=蓝");
+    add("dart_saturation_min", "饱和度下限", "", "dart", "dart_detection", "saturation_min", true, 0, 255, "飞镖检测参数");
+    add("dart_value_min", "亮度下限", "", "dart", "dart_detection", "value_min", true, 0, 255, "飞镖检测参数");
+    add("dart_red_low_max", "红色色相低段上限", "", "dart", "dart_detection", "red_low_max", true, 0, 179, "飞镖检测参数");
+    add("dart_red_high_min", "红色色相高段下限", "", "dart", "dart_detection", "red_high_min", true, 0, 179, "飞镖检测参数");
+    add("dart_blue_hue_min", "蓝色色相下限", "", "dart", "dart_detection", "blue_hue_min", true, 0, 179, "飞镖检测参数");
+    add("dart_blue_hue_max", "蓝色色相上限", "", "dart", "dart_detection", "blue_hue_max", true, 0, 179, "飞镖检测参数");
+    add("dart_min_area", "飞镖最小面积", "", "dart", "dart_detection", "min_area", false, 0, 1000000, "飞镖检测参数");
+    add("dart_max_area", "飞镖最大面积", "", "dart", "dart_detection", "max_area", false, 0, 1000000, "飞镖检测参数");
+    add("dart_min_aspect", "飞镖宽高比下限", "", "dart", "dart_detection", "min_aspect", false, 0.001, 100, "飞镖检测参数");
+    add("dart_max_aspect", "飞镖宽高比上限", "", "dart", "dart_detection", "max_aspect", false, 0.001, 100, "飞镖检测参数");
+    add("dart_close_kernel", "飞镖闭运算核", "", "dart", "dart_detection", "close_kernel", true, 1, 31, "飞镖检测参数");
+    add("dart_max_distance", "最大关联距离", "", "dart", "dart_detection", "max_distance", false, 0.001, 10000, "飞镖检测参数");
+    add("dart_min_motion", "最小运动距离", "", "dart", "dart_detection", "min_motion", false, 0.001, 10000, "飞镖检测参数");
+    add("dart_max_lost_frames", "飞镖容许丢帧", "", "dart", "dart_detection", "max_lost_frames", true, 0, 1000, "飞镖检测参数");
+    add("dart_max_track_points", "轨迹点上限", "", "dart", "dart_detection", "max_track_points", true, 2, 1000, "飞镖检测参数");
+    add("dart_draw_debug", "飞镖标注", "", "dart", "dart_detection", "draw_debug", true, 0, 1, "飞镖检测参数");
 }
 
 void RuntimeParams::initialize(const std::map<std::string, double> &from_yaml)
@@ -420,11 +446,30 @@ void RuntimeParams::initialize(const std::map<std::string, double> &from_yaml)
         {"dist_near_thresh", 100.0},
         {"exposure", 4000.0},
         {"gain", 10.0},
+        {"dart_enabled", 0},
+        {"dart_color", 0},
+        {"dart_saturation_min", 100},
+        {"dart_value_min", 80},
+        {"dart_red_low_max", 10},
+        {"dart_red_high_min", 170},
+        {"dart_blue_hue_min", 90},
+        {"dart_blue_hue_max", 135},
+        {"dart_min_area", 20},
+        {"dart_max_area", 5000},
+        {"dart_min_aspect", 0.15},
+        {"dart_max_aspect", 8},
+        {"dart_close_kernel", 3},
+        {"dart_max_distance", 120},
+        {"dart_min_motion", 4},
+        {"dart_max_lost_frames", 5},
+        {"dart_max_track_points", 100},
+        {"dart_draw_debug", 1},
     };
 
     std::lock_guard<std::mutex> lock(mutex_);
     values_.clear();
     saved_.clear();
+    dart_revision_ = 0;
     for (const auto &def : defs_)
     {
         auto it = from_yaml.find(def.name);
@@ -444,9 +489,10 @@ void RuntimeParams::setConfigPath(const std::string &path)
     config_path_ = path;
 }
 
-RuntimeParams::Snapshot RuntimeParams::snapshot() const
+RuntimeParams::Snapshot RuntimeParams::snapshot(uint64_t *dart_revision) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (dart_revision) *dart_revision = dart_revision_;
     return values_;
 }
 
@@ -526,6 +572,13 @@ bool RuntimeParams::validateCross(const Snapshot &candidate, std::string *error)
         *error = "近距离阈值不能大于远距离阈值";
         return false;
     }
+    if (at("dart_min_area") > at("dart_max_area") || at("dart_min_aspect") > at("dart_max_aspect") ||
+        at("dart_blue_hue_min") > at("dart_blue_hue_max") || at("dart_red_low_max") >= at("dart_red_high_min") ||
+        at("dart_min_motion") > at("dart_max_distance") || static_cast<int>(at("dart_close_kernel")) % 2 == 0)
+    {
+        *error = "飞镖参数范围冲突或形态学核不是奇数";
+        return false;
+    }
     return true;
 }
 
@@ -586,6 +639,11 @@ bool RuntimeParams::applyValues(
             values_[kv.first] = kv.second;
             applied_changes.push_back({kv.first, {old_value, kv.second}});
         }
+        for (const auto &change : applied_changes)
+            if (change.first.rfind("dart_", 0) == 0 && change.first != "dart_draw_debug") {
+                ++dart_revision_;
+                break;
+            }
     }
 
     // 3) 通知事件（锁外调用，避免回调与参数锁互相等待）
@@ -684,11 +742,18 @@ bool RuntimeParams::saveToYaml(const std::string &path, std::string *error)
             auto it = snapshot_copy.find(def.name);
             if (it == snapshot_copy.end())
                 continue;
-            const std::string value_text = formatYamlValue(it->second, def.is_int);
+            std::string value_text = formatYamlValue(it->second, def.is_int);
+            if (def.name == "dart_color") value_text = it->second == 0 ? "red" : "blue";
+            if (def.name == "dart_enabled" || def.name == "dart_draw_debug") value_text = it->second == 0 ? "false" : "true";
             if (replaceYamlScalar(text, splitPath(def.yaml_section), def.yaml_key, value_text))
                 ++replaced_count;
             else
                 missing.push_back(def.name);
+        }
+        if (!missing.empty())
+        {
+            if (error) *error = "配置缺少可保存参数，请补充节点后重试: " + missing.front();
+            return false;
         }
         if (replaced_count == 0)
         {

@@ -136,6 +136,29 @@ chmod +x watchdog.sh build_and_run.sh
 6. 时间滤波：连续 `required_frames` 帧稳定后进入追踪；连续 `required_lost_frames` 帧丢失后退出追踪
 7. 追踪状态下计算转向方向和距离阶段，通过串口发送
 
+## 飞镖轨迹离线测试（P2-A）
+
+`config/debug.yaml` 的 `dart_detection` 分组控制启用、颜色和阈值；可通过 Web 参数页热更新、保存，关键参数变更会重置轨迹。默认算法参数只是合成测试起点，尚未实拍标定。
+
+```bash
+cmake -S . -B build && cmake --build build -j2
+./build/test_dart_tracking
+./run_web_debug.sh --source video:/path/to/video.avi --no-serial --no-gui
+```
+
+Web「飞镖识别」面板显示状态并可请求重置，录像时重置请求写入事件；调试画面显示候选框、关联框、轨迹和状态，原始录像不含这些标注。录制遥测 CSV 包含飞镖检测、状态和耗时列。`/api/status` 的帧数据中 `dart` 对象提供候选、轨迹、状态和时间信息。`timestamp_us` 是处理时的单调时钟；视频的 `source_time_ms` 由帧序号和标称帧率推算，不能当作相机硬件时间或精确飞行时间。视频循环时轨迹会重置。
+
+独立运行不启动 Flask 或 OpenCV 窗口，自动录像来源由 `recording.record_image_mode` 或命令行指定：
+
+```bash
+./run_web_debug.sh --headless --source synthetic --no-serial
+./run_web_debug.sh --headless --source synthetic --no-serial --auto-record --record-image-mode raw
+```
+
+Web 模式可在页面选择录像来源并手动开始或停止；独立运行仍保留本机录像控制端口。`dart_color` 热更新 API 使用 0=红、1=蓝，也接受字符串 `red` / `blue`；开关使用 0/1，YAML 保存为原有字符串与布尔值。
+
+当前方法依赖颜色和连续帧运动；相机抖动、同色运动干扰、遮挡和高速模糊均可能造成误检或丢失，需要用实际录像标定和验证。
+
 ## 依赖
 
 - OpenCV（4.x）

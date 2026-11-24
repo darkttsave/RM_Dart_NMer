@@ -134,14 +134,18 @@ public:
         label_ = "模拟视频源：视频文件 " + path;
     }
 
+    bool isOpened() const { return cap_.isOpened(); }
+
     bool next(cv::Mat &out) override
     {
+        looped_ = false;
         if (!cap_.isOpened())
             return false;
         if (!cap_.read(out) || out.empty())
         {
             // 循环播放
             cap_.set(cv::CAP_PROP_POS_FRAMES, 0);
+            looped_ = true;
             return cap_.read(out) && !out.empty();
         }
         return true;
@@ -149,9 +153,19 @@ public:
 
     const std::string &sourceKind() const override { return kind_; }
     const std::string &sourceLabel() const override { return label_; }
+    bool looped() const override { return looped_; }
+    std::optional<double> sourceTimeMs() const override
+    {
+        const double fps = cap_.get(cv::CAP_PROP_FPS);
+        const double position = cap_.get(cv::CAP_PROP_POS_FRAMES);
+        if (fps > 0.0 && position >= 1.0)
+            return (position - 1.0) * 1000.0 / fps;
+        return std::nullopt;
+    }
 
 private:
     cv::VideoCapture cap_;
+    bool looped_ = false;
     std::string kind_;
     std::string label_;
 };
@@ -187,7 +201,10 @@ std::unique_ptr<FrameSource> createFrameSource(const std::string &spec, std::str
     if (spec.rfind(videoPrefix, 0) == 0)
     {
         const std::string path = spec.substr(videoPrefix.size());
-        return std::make_unique<VideoFrameSource>(path);
+        auto source = std::make_unique<VideoFrameSource>(path);
+        if (!source->isOpened())
+            return fail("无法打开视频文件: " + path + "（请检查路径、文件及视频编码）");
+        return source;
     }
 
     return fail("未知模拟视频源: " + spec + "（支持 synthetic / synthetic:none / image:<path> / video:<path>）");
