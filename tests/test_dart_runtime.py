@@ -37,7 +37,8 @@ def main():
         img=np.zeros((240,320,3),np.uint8);cv2.rectangle(img,(20+i*5,120),(39+i*5,130),(0,0,255),-1);writer.write(img)
     writer.release(); log=open(t/'run.log','w'); processes=[]
     def start_main():
-        p=subprocess.Popen([str(ROOT/'build/main'),'--source',f'video:{video}','--no-gui','--no-serial','--no-auto-record','--record-root',str(t/'rec')],cwd=t/'build',stdout=log,stderr=log);processes.append(p);return p
+        extra=['--parallel-detection'] if os.environ.get('DART_TEST_PARALLEL')=='1' else []
+        p=subprocess.Popen([str(ROOT/'build/main'),'--source',f'video:{video}','--no-gui','--no-serial','--no-auto-record','--record-root',str(t/'rec'),*extra],cwd=t/'build',stdout=log,stderr=log);processes.append(p);return p
     flask=subprocess.Popen([sys.executable,str(ROOT/'debug/web/app.py'),'--port',str(wp),'--data-port',str(dp),'--control-port',str(cp)],cwd=ROOT,stdout=log,stderr=log);processes.append(flask)
     proc=start_main();base=f'http://127.0.0.1:{wp}'
     def get(path):return requests.get(base+path,timeout=5).json()

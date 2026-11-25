@@ -51,8 +51,9 @@ def main():
         server=socket.socket();server.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         server.bind(('127.0.0.1',data_port));server.listen(1);server.settimeout(15)
         log=open(tmp/'process.log','w')
+        extra=['--parallel-detection'] if os.environ.get('DART_TEST_PARALLEL')=='1' else []
         proc=subprocess.Popen([str(BINARY),'--source','video:'+str(video),'--no-serial','--no-gui',
-            '--no-auto-record','--record-root',str(tmp/'rec')],cwd=tmp/'build',stdout=log,stderr=log)
+            '--no-auto-record','--record-root',str(tmp/'rec'),*extra],cwd=tmp/'build',stdout=log,stderr=log)
         collected=[]; stop=threading.Event(); reader=None; conn=None
         try:
             conn,_=server.accept();conn.settimeout(3)

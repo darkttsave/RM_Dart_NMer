@@ -302,17 +302,22 @@ Mat GreenDetect::preprocessGreenChannel(const Mat &image)
         // G > B 且 G > R 时，HSV 的 V 恰好为 G。保留原有浮点除法和严格大于比较，
         // 合并颜色条件以减少中间图与全图遍历。支持非连续 Mat 的逐行访问。
         StageTimer t(profileEnabled_, profileTimes_[2]);
-        for (int y = 0; y < image.rows; ++y) {
-            const auto *src = image.ptr<cv::Vec3b>(y);
-            auto *dst = binary.ptr<uchar>(y);
-            for (int x = 0; x < image.cols; ++x) {
-                const int b = src[x][0], g = src[x][1], r = src[x][2];
-                dst[x] = g > brightThresh_ && g > b && g > r &&
-                         static_cast<float>(g) / static_cast<float>(b + g + r + 1) > greenWeightThresh_ ? 255 : 0;
+        // 只并行独立的图像行，保留逐像素判定与浮点计算；限制任务数量避免过度并发。
+        cv::parallel_for_(cv::Range(0, image.rows), [&](const cv::Range &rows) {
+            for (int y = rows.start; y < rows.end; ++y) {
+                const auto *src = image.ptr<cv::Vec3b>(y);
+                auto *dst = binary.ptr<uchar>(y);
+                for (int x = 0; x < image.cols; ++x) {
+                    const int b = src[x][0], g = src[x][1], r = src[x][2];
+                    dst[x] = g > brightThresh_ && g > b && g > r &&
+                             static_cast<float>(g) / static_cast<float>(b + g + r + 1) > greenWeightThresh_ ? 255 : 0;
+                }
             }
-        }
+        }, 4.0);
     }
 
+    // 全零掩码经过开闭运算仍为全零，可直接保留以供后续状态与调试输出使用。
+    if (cv::countNonZero(binary) != 0)
     {
     StageTimer t(profileEnabled_, profileTimes_[4]);
     int kSize = (kernelSize_ % 2 == 0) ? kernelSize_ + 1 : kernelSize_;

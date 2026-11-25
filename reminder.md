@@ -7,8 +7,10 @@ cmake -S . -B build && cmake --build build -j2
 ```
 
 ```bash
-./run_web_debug.sh                                         # 相机、串口与实时预览
-./run_web_debug.sh --source synthetic --no-serial --no-gui # 模拟源，无需相机和电控
+./run_web_debug.sh                                         # 相机、串口与 Web 预览，默认无本地窗口
+./run_web_debug.sh --no-serial --gui                       # 相机、Web 预览和本地调试窗口
+./run_web_debug.sh --no-serial --parallel-detection        # 实验：并行绿灯与飞镖检测
+./run_web_debug.sh --source synthetic --no-serial          # 模拟源，无需相机和电控
 ./run_web_debug.sh --record-only                           # 无页面自动录制
 ./run_web_debug.sh --record-only --source synthetic --no-serial # 模拟录制
 ./run_web_debug.sh --replay                                # 历史回放

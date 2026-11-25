@@ -8,13 +8,16 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -40,6 +43,57 @@ using namespace std;
 
 namespace
 {
+struct DartDetectionResult
+{
+    std::vector<dartvision::Candidate> candidates;
+    double elapsedMs = 0.0;
+};
+
+// 单个长期运行的工作线程；每帧汇合后才提交下一帧，避免乱序和积压。
+class DartDetectionWorker
+{
+public:
+    DartDetectionWorker() : thread_([this] { run(); }) {}
+    ~DartDetectionWorker()
+    {
+        { std::lock_guard<std::mutex> lock(mutex_); stop_ = true; }
+        condition_.notify_one();
+        thread_.join();
+    }
+    std::future<DartDetectionResult> submit(const cv::Mat &image, dartvision::DartDetector detector)
+    {
+        std::packaged_task<DartDetectionResult()> task([image, detector = std::move(detector)] {
+            const auto start = std::chrono::steady_clock::now();
+            auto candidates = detector.detect(image);
+            return DartDetectionResult{std::move(candidates),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count()};
+        });
+        auto result = task.get_future();
+        { std::lock_guard<std::mutex> lock(mutex_); pending_ = std::move(task); }
+        condition_.notify_one();
+        return result;
+    }
+private:
+    void run()
+    {
+        for (;;) {
+            std::packaged_task<DartDetectionResult()> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                condition_.wait(lock, [this] { return stop_ || pending_.valid(); });
+                if (stop_ && !pending_.valid()) return;
+                task = std::move(pending_);
+            }
+            task();
+        }
+    }
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::packaged_task<DartDetectionResult()> pending_;
+    bool stop_ = false;
+    std::thread thread_;
+};
+
 std::atomic<bool> g_shutdown_requested{false};
 
 /** 信号处理：只置退出标志（async-signal-safe），由主循环完成后台线程收尾 */
@@ -62,19 +116,20 @@ void installSignalHandlers()
 /**
  * @brief 调试链路命令行参数（全部可选）
  *
- * 不指定时行为与原有主程序一致：海康相机 + 串口 + GUI + 录制开启。
+ * 默认使用海康相机、串口和录制系统，本地 GUI 按需开启。
  */
 struct CliOptions
 {
     std::string sourceSpec;        // 空 = 海康工业相机；synthetic / image:<path> / video:<path>
     bool forceSimSerial = false;   // --no-serial: 跳过串口打开，仅模拟发送
-    bool showGui = true;           // --no-gui: 不创建 OpenCV 窗口（无头测试/服务器）
+    bool showGui = false;          // --gui: 按需显示 OpenCV 调试窗口
     bool recordEnabled = true;     // --record / --no-record: 录制系统开关（覆盖配置）
     int autoRecordOverride = -1;   // -1=跟随配置, 0=不自动录制, 1=启动即录制（覆盖配置）
     std::string recordRoot;        // --record-root: 录制会话根目录（覆盖配置）
     std::string recordImageMode;   // --record-image-mode: 自动录像来源
     int webDebugOverride = -1;     // -1=跟随配置文件, 0=强制关闭, 1=强制开启
     bool perf = false;
+    bool parallelDetection = false;
 };
 
 void printUsage(const char *prog)
@@ -84,7 +139,8 @@ void printUsage(const char *prog)
          << "  --source <spec>     使用模拟视频源（默认使用海康工业相机）\n"
          << "                      spec: synthetic | synthetic:none | image:<path> | video:<path>\n"
          << "  --no-serial         不打开串口，使用模拟发送（无电控环境测试）\n"
-         << "  --no-gui            不创建 OpenCV 显示窗口（无头运行）\n"
+         << "  --gui               显示 OpenCV 调试窗口（默认关闭）\n"
+         << "  --no-gui            不创建 OpenCV 显示窗口\n"
          << "  --record            启用录制（覆盖配置 recording.enabled）\n"
          << "  --no-record         关闭录制（不生成会话目录/CSV/视频）\n"
          << "  --auto-record       程序启动即开始录制（覆盖配置 recording.auto_start）\n"
@@ -94,6 +150,7 @@ void printUsage(const char *prog)
          << "  --web-debug         强制启用 Web 调试数据发布（覆盖配置）\n"
          << "  --no-web-debug      强制关闭 Web 调试数据发布（覆盖配置）\n"
          << "  --perf              每 5 秒输出一次处理阶段性能统计\n"
+         << "  --parallel-detection 并行绿灯与飞镖检测（实验选项）\n"
          << "  -h, --help          显示帮助\n";
 }
 
@@ -107,6 +164,8 @@ CliOptions parseCli(int argc, char **argv)
             opt.sourceSpec = argv[++i];
         else if (arg == "--no-serial")
             opt.forceSimSerial = true;
+        else if (arg == "--gui")
+            opt.showGui = true;
         else if (arg == "--no-gui")
             opt.showGui = false;
         else if (arg == "--record")
@@ -127,6 +186,8 @@ CliOptions parseCli(int argc, char **argv)
             opt.webDebugOverride = 0;
         else if (arg == "--perf")
             opt.perf = true;
+        else if (arg == "--parallel-detection")
+            opt.parallelDetection = true;
         else if (arg == "-h" || arg == "--help")
         {
             printUsage(argv[0]);
@@ -643,6 +704,8 @@ int main(int argc, char **argv)
     double fpsEma = 0.0;
     uint64_t frameCounter = 0;
     uint64_t appliedDartRevision = 0;
+    std::unique_ptr<DartDetectionWorker> dartWorker;
+    if (cli.parallelDetection) dartWorker = std::make_unique<DartDetectionWorker>();
     PerformanceStats perf(cli.perf);
     detector.enablePerformanceProfiling(cli.perf);
     if (cli.perf) cout << "[GreenPerf] G01/G02/G04 合并计入 G03_fused_color" << endl;
@@ -791,17 +854,6 @@ int main(int argc, char **argv)
                                static_cast<int>(std::lround(runtimeValue("open_iterations"))),
                                static_cast<int>(std::lround(runtimeValue("close_iterations"))));
 
-        // 主循环帧率（含采集/显示开销）与识别处理耗时：来自实际运行，非估算
-        const auto frameStartTime = std::chrono::steady_clock::now();
-        auto target = detector.detectGreenTarget(image);
-        const auto detectEndTime = std::chrono::steady_clock::now();
-        const double processingTimeMs =
-            std::chrono::duration<double, std::milli>(detectEndTime - frameStartTime).count();
-        perf.add(perf.green, processingTimeMs);
-        const int64_t frameTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                             detectEndTime.time_since_epoch())
-                                             .count();
-        const uint64_t frameId = ++frameCounter;
         const bool resetDart = dartRevision != appliedDartRevision;
         appliedDartRevision = dartRevision;
         dartEnabled = runtimeValue("dart_enabled") != 0;
@@ -823,24 +875,51 @@ int main(int argc, char **argv)
         dartTrackerConfig.max_lost_frames = static_cast<int>(runtimeValue("dart_max_lost_frames"));
         dartTrackerConfig.max_points = static_cast<int>(runtimeValue("dart_max_track_points"));
         dartDetector = dartvision::DartDetector(dartDetectorConfig);
+        std::future<DartDetectionResult> dartFuture;
+        if (dartWorker && dartEnabled)
+            dartFuture = dartWorker->submit(image, dartDetector);
+
+        // 主循环帧率（含采集/显示开销）与识别处理耗时：来自实际运行，非估算
+        const auto frameStartTime = std::chrono::steady_clock::now();
+        auto target = detector.detectGreenTarget(image);
+        const auto detectEndTime = std::chrono::steady_clock::now();
+        const double processingTimeMs =
+            std::chrono::duration<double, std::milli>(detectEndTime - frameStartTime).count();
+        perf.add(perf.green, processingTimeMs);
+        const int64_t frameTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                             detectEndTime.time_since_epoch())
+                                             .count();
+        const uint64_t frameId = ++frameCounter;
         if (resetDart) dartTracker = dartvision::DartTracker(dartTrackerConfig);
         const auto manualResets = dartResetRequests.exchange(0);
-        if (manualResets) {
-            dartTracker.reset();
-        }
+        if (manualResets) dartTracker.reset();
         dartvision::TrackResult dartResult;
         std::vector<dartvision::Candidate> dartCandidates;
         const auto overlayStart = PerformanceStats::Clock::now();
         cv::Mat annotatedDebug = detector.getDebugImage();
         double dartProcessingMs = 0.0;
+        double dartBlockedMs = 0.0;
         if (dartEnabled)
         {
-            const auto dartStart = std::chrono::steady_clock::now();
+            const auto blockedStart = std::chrono::steady_clock::now();
+            double detectionMs = 0.0;
+            if (dartWorker) {
+                auto detection = dartFuture.get();
+                dartCandidates = std::move(detection.candidates);
+                detectionMs = detection.elapsedMs;
+            } else {
+                const auto dartStart = std::chrono::steady_clock::now();
+                dartCandidates = dartDetector.detect(image);
+                detectionMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dartStart).count();
+            }
+            const auto trackStart = std::chrono::steady_clock::now();
             if (frameSource && frameSource->looped()) dartTracker.reset();
-            dartCandidates = dartDetector.detect(image);
             dartResult = dartTracker.update(dartCandidates, frameId, frameTimestampUs,
                                              frameSource ? frameSource->sourceTimeMs() : std::nullopt);
-            dartProcessingMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dartStart).count();
+            dartProcessingMs = detectionMs + std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - trackStart).count();
+            dartBlockedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - blockedStart).count();
             if (dartAnnotate && !annotatedDebug.empty())
             {
                 annotatedDebug = annotatedDebug.clone();
@@ -858,7 +937,7 @@ int main(int argc, char **argv)
         }
         if (dartEnabled) perf.add(perf.dart, dartProcessingMs);
         if (webDebugEnabled) webPerformance.processed(PerformanceStats::Clock::now(), processingTimeMs + dartProcessingMs);
-        perf.add(perf.overlay, std::max(0.0, PerformanceStats::ms(overlayStart, PerformanceStats::Clock::now()) - dartProcessingMs));
+        perf.add(perf.overlay, std::max(0.0, PerformanceStats::ms(overlayStart, PerformanceStats::Clock::now()) - dartBlockedMs));
         // M3：参数事件记录"生效时最近一帧"的帧号与时间戳（与遥测/视频索引同一时间基准）
         runtimeParams.setFrameContext(frameId, frameTimestampUs);
         {

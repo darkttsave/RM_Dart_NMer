@@ -27,5 +27,19 @@ int main()
                 cv::norm(reference.getBinaryImage(), candidate.getBinaryImage(), cv::NORM_INF) != 0) return 2;
         } else if (!candidate.getDebugImage().empty() || !candidate.getBinaryImage().empty()) return 3;
     }
-    std::cout << "PASS 关闭、开启及再次关闭调试绘制，检测与跟踪结果一致\n";
+    GreenDetect disappearance;
+    disappearance.setRequiredFrames(1);
+    disappearance.setRequiredLostFrames(2);
+    cv::Mat target(360, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::circle(target, cv::Point(320, 180), 18, cv::Scalar(0, 255, 0), -1);
+    if (!disappearance.detectGreenTarget(target).detected || !disappearance.isTracking()) return 4;
+    cv::Mat empty = cv::Mat::zeros(target.size(), target.type());
+    const auto lost = disappearance.detectGreenTarget(empty);
+    if (lost.detected || !disappearance.isTracking() || disappearance.getLostFrames() != 1 ||
+        disappearance.getGreenPixelCount() != 0 || disappearance.getCandidateCount() != 0 ||
+        disappearance.getBinaryImage().empty() || cv::countNonZero(disappearance.getBinaryImage()) != 0 ||
+        disappearance.getDebugImage().empty()) return 5;
+    disappearance.detectGreenTarget(empty);
+    if (disappearance.isTracking() || disappearance.getLostFrames() != 2) return 6;
+    std::cout << "PASS 调试绘制切换、空掩码及目标丢失状态\n";
 }

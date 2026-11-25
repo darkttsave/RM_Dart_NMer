@@ -51,7 +51,9 @@ usage() {
   --record-image-mode <raw|debug> 自动录像来源（覆盖配置）
   --source <spec>     模拟视频源: synthetic | synthetic:none | image:<path> | video:<path>
   --no-serial         不打开串口（模拟发送）
-  --no-gui            无头运行（不创建 OpenCV 窗口）
+  --gui               显示 OpenCV 调试窗口（默认关闭）
+  --no-gui            不创建 OpenCV 窗口（默认）
+  --parallel-detection 并行绿灯与飞镖检测（实验选项）
   --no-record         关闭录制
   --record-root <dir> 录制会话根目录
   --no-web-debug      关闭实时预览
@@ -64,6 +66,7 @@ usage() {
 示例:
   ./run_web_debug.sh                                          # 真实使用（预览，录制手动开始）
   ./run_web_debug.sh --auto-record                            # 预览 + 启动即录制
+  ./run_web_debug.sh --no-serial --gui                       # 同时显示本地调试窗口
   ./run_web_debug.sh --record-only                            # 无预览自动录制（现场一键录制）
   ./run_web_debug.sh --record-only --record-root /data/rec    # 无预览录制到指定目录
   ./run_web_debug.sh --source synthetic --no-serial --no-gui  # 无相机联调
