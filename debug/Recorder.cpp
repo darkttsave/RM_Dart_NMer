@@ -26,6 +26,7 @@
 #include <ctime>
 #include <filesystem>
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <vector>
 
@@ -45,7 +46,7 @@ constexpr const char *kTelemetryHeader =
     "lock_frames,required_frames,lost_frames,required_lost_frames,"
     "green_pixels,candidate_count,fps,processing_time_ms,"
     "dart_enabled,dart_detected,dart_center_x,dart_center_y,dart_candidate_count,"
-    "dart_track_valid,dart_track_state,dart_lost_frames,dart_failure_reason,dart_processing_ms\n";
+    "dart_track_valid,dart_track_state,dart_lost_frames,dart_failure_reason,dart_processing_ms,yaw_actual_deg,yaw_received_epoch_ms,yaw_status\n";
 
 constexpr const char *kVideoIndexHeader =
     "video_frame_index,source_frame_id,source_timestamp_us,source_elapsed_us\n";
@@ -575,7 +576,11 @@ void Recorder::submitFrame(const RecordFrame &frame)
         if (frame.dart_result.center) dart << frame.dart_result.center->y;
         dart << ',' << frame.dart_result.candidate_count << ',' << (frame.dart_result.track_valid ? 1 : 0)
              << ',' << frame.dart_result.track_state << ',' << frame.dart_result.lost_frames
-             << ',' << frame.dart_result.failure_reason << ',' << frame.dart_processing_ms << '\n';
+             << ',' << frame.dart_result.failure_reason << ',' << frame.dart_processing_ms << ',';
+        if (frame.yaw_actual_deg) dart << std::setprecision(9) << *frame.yaw_actual_deg;
+        dart << ',';
+        if (frame.yaw_received_epoch_ms) dart << *frame.yaw_received_epoch_ms;
+        dart << ',' << frame.yaw_status << '\n';
         row += dart.str();
         {
             std::lock_guard<std::mutex> lk(telemetry_mutex_);

@@ -9,6 +9,9 @@
 #include "CRC16.hpp"
 #include "ByteConverter.h"
 #include <iostream>
+#include <algorithm>
+#include <cmath>
+#include <cerrno>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -123,8 +126,46 @@ bool VirtualSerial::sendCommand(float turnFlag, float distanceFlag, float clearF
     return false;
 }
 
+VirtualSerial::YawFeedback VirtualSerial::PollYawFeedback(int timeout_ms)
+{
+    if (IsOpen() && !simulated_) {
+        uint8_t bytes[512];
+        // 每帧最多读取一次，避免高流量时占满视觉线程。
+        const ssize_t count = read(serialFd_, bytes, sizeof(bytes));
+        if (count > 0) rxBuffer_.insert(rxBuffer_.end(), bytes, bytes + count);
+        while (true) {
+            auto start = std::find(rxBuffer_.begin(), rxBuffer_.end(), uint8_t{0x5B});
+            rxBuffer_.erase(rxBuffer_.begin(), start);
+            if (rxBuffer_.size() < 8) break;
+            if (!crc16::Verify_CRC16_Check_Sum(rxBuffer_.data(), 8)) {
+                rxBuffer_.erase(rxBuffer_.begin());
+                continue;
+            }
+            const uint32_t bits = uint32_t(rxBuffer_[1]) | (uint32_t(rxBuffer_[2]) << 8) |
+                                  (uint32_t(rxBuffer_[3]) << 16) | (uint32_t(rxBuffer_[4]) << 24);
+            float value;
+            static_assert(sizeof(value) == sizeof(bits), "float32 required");
+            std::memcpy(&value, &bits, sizeof(value));
+            yawFeedback_.seen = true;
+            yawFeedback_.valid = rxBuffer_[5] == 1 && std::isfinite(value);
+            yawFeedback_.degrees = value;
+            yawFeedback_.received_at = std::chrono::steady_clock::now();
+            yawFeedback_.received_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            rxBuffer_.erase(rxBuffer_.begin(), rxBuffer_.begin() + 8);
+        }
+    }
+    YawFeedback result = yawFeedback_;
+    if (!IsOpen() || simulated_ || !result.seen ||
+        std::chrono::steady_clock::now() - result.received_at > std::chrono::milliseconds(timeout_ms))
+        result.valid = false;
+    return result;
+}
+
 void VirtualSerial::Close()
 {
+    rxBuffer_.clear();
+    yawFeedback_ = YawFeedback{};
     if (IsOpen())
     {
         close(serialFd_);

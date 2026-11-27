@@ -637,6 +637,8 @@ function updateDevGauge(frame) {
 // 实时曲线：字段定义（每个字段独立纵轴，避免不同量纲混用）
 // ---------------------------------------------------------------------------
 const CHART_FIELDS = [
+  { key: "yaw_actual_deg", label: "电控实际 Yaw", unit: "°", color: "#58a6ff",
+    get: (f) => f.yaw_status === "valid" ? f.yaw_actual_deg : null },
   { key: "fps", label: "处理帧率", unit: "fps", color: "#3fb950",
     get: (f) => f.fps },
   { key: "proc", label: "识别耗时", unit: "ms", color: "#d29922", zero: true,
@@ -655,7 +657,7 @@ const CHART_FIELDS = [
     get: (f) => f.lock_frames },
 ];
 const FIELD_BY_KEY = Object.fromEntries(CHART_FIELDS.map((f) => [f.key, f]));
-const selected = new Set(["fps", "proc", "target_x", "offset_x"]);
+const selected = new Set(["yaw_actual_deg", "fps", "proc", "offset_x"]);
 
 for (const field of CHART_FIELDS) state.series[field.key] = [];
 
@@ -695,7 +697,7 @@ function ensureChartCards() {
     const value = document.createElement("span");
     value.className = "chart-value";
     value.style.color = field.color;
-    value.textContent = "--";
+    value.textContent = key === "yaw_actual_deg" ? "等待反馈" : "--";
     top.appendChild(title);
     top.appendChild(value);
     const canvas = document.createElement("canvas");
@@ -728,7 +730,7 @@ function renderSeriesPicker() {
 
 function pushSample(key, t, v) {
   const arr = state.series[key];
-  arr.push({ t, v: Number(v) });
+  arr.push({ t, v: v === null ? null : Number(v) });
   if (arr.length > MAX_POINTS) arr.splice(0, arr.length - MAX_POINTS);
 }
 
@@ -736,7 +738,10 @@ function appendSample(f) {
   const t = Number(f.timestamp_ms) || Date.now();
   for (const field of CHART_FIELDS) {
     const v = field.get(f);
-    if (v === null || v === undefined || Number.isNaN(Number(v))) continue;
+    if (v === null || v === undefined || Number.isNaN(Number(v))) {
+      if (field.key === "yaw_actual_deg") pushSample(field.key, t, null);
+      continue;
+    }
     pushSample(field.key, t, v);
   }
 }
@@ -784,7 +789,7 @@ function drawChart(key) {
   if (field.fixed) {
     [vmin, vmax] = field.fixed;
   } else {
-    const vals = data.map((p) => p.v);
+    const vals = data.filter((p) => p.v !== null).map((p) => p.v);
     if (field.ref && state.latest) {
       const refV = field.ref(state.latest);
       if (typeof refV === "number" && isFinite(refV)) vals.push(refV);
@@ -825,6 +830,7 @@ function drawChart(key) {
     ctx.beginPath();
     let started = false, prevT = null;
     for (const p of data) {
+      if (p.v === null) { started = false; prevT = null; continue; }
       if (prevT !== null && p.t - prevT > 1500) started = false;
       const x = xOf(p.t), y = yOf(p.v);
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
@@ -832,13 +838,16 @@ function drawChart(key) {
     }
     ctx.stroke();
     const last = data[data.length - 1];
-    ctx.fillStyle = field.color;
-    ctx.beginPath();
-    ctx.arc(xOf(last.t), yOf(last.v), 2.4, 0, Math.PI * 2);
-    ctx.fill();
-    ui.value.textContent = chartValueText(last.v);
+    if (last.v !== null && (key !== "yaw_actual_deg" || (state.latest && state.latest.yaw_status === "valid" && now - last.t < 1500))) {
+      ctx.fillStyle = field.color;
+      ctx.beginPath(); ctx.arc(xOf(last.t), yOf(last.v), 2.4, 0, Math.PI * 2); ctx.fill();
+      ui.value.textContent = chartValueText(last.v);
+    } else if (key === "yaw_actual_deg") {
+      const statuses = {waiting:"等待反馈", invalid:"反馈无效", stale:"数据过期", disconnected:"串口未连接"};
+      ui.value.textContent = (state.latest && now - last.t < 1500 && statuses[state.latest.yaw_status]) || "数据过期";
+    } else ui.value.textContent = "--";
   } else {
-    ui.value.textContent = "--";
+    ui.value.textContent = key === "yaw_actual_deg" ? "等待反馈" : "--";
   }
 
   // 独立纵轴上下限

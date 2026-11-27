@@ -11,6 +11,7 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <chrono>
 
 /**
  * @brief 飞镖制导串口通信类
@@ -45,6 +46,16 @@ public:
      * @return 是否成功
      */
     bool Open();
+
+    struct YawFeedback {
+        bool seen = false;
+        bool valid = false;
+        float degrees = 0;
+        int64_t received_epoch_ms = 0;
+        std::chrono::steady_clock::time_point received_at{};
+    };
+    // 非阻塞读取，按 T0.2 解析 0x5B；不改变 0x5A 发送。
+    YawFeedback PollYawFeedback(int timeout_ms);
 
     /**
      * @brief 关闭串口
@@ -120,6 +131,8 @@ private:
      */
     std::string FindAvailablePort();
 
+    std::vector<uint8_t> rxBuffer_;
+    YawFeedback yawFeedback_;
     int serialFd_;              // 串口文件描述符
     std::string portName_;      // 串口设备名称
     bool simulated_ = false;    // 模拟模式标志

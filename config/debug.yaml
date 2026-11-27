@@ -52,6 +52,7 @@ detection:
 communication:
   port: "/dev/ttyACM0"
   baudrate: 115200
+  yaw_timeout_ms: 1000  # 临时失联阈值；按电控实际发送周期协商调整
   watchdog: true  # true=发送失败时程序退出(配合watchdog.sh重启); false=切换模拟模式
 
 # M1 Web 调试数据发布（独立后台线程；Flask/浏览器未连接时自动丢弃调试帧，不影响主链路）

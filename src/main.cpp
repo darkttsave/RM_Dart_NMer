@@ -219,6 +219,7 @@ int main(int argc, char **argv)
     std::string serialPort = "/dev/ttyACM0";
     bool showTxTerminal = false;
     bool serialWatchdog = false;
+    int yawTimeoutMs = 1000; // 临时值，需与电控上报周期协商
     int terminalLogLineLimit = 50;
     int brightThresh = 80;
     int greenWeightX100 = 40; // green_weight_thresh * 100
@@ -362,6 +363,8 @@ int main(int argc, char **argv)
             distNearThresh = config["turn_control"]["dist_near_thresh"].as<double>();
         if (config["communication"] && config["communication"]["port"])
             serialPort = config["communication"]["port"].as<std::string>();
+        if (config["communication"] && config["communication"]["yaw_timeout_ms"])
+            yawTimeoutMs = std::clamp(config["communication"]["yaw_timeout_ms"].as<int>(), 1, 600000);
         if (config["communication"] && config["communication"]["watchdog"])
             serialWatchdog = config["communication"]["watchdog"].as<bool>();
         if (config["debug_setting"] && config["debug_setting"]["show_tx_terminal"])
@@ -958,6 +961,10 @@ int main(int argc, char **argv)
         const int64_t frameTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                              detectEndTime.time_since_epoch())
                                              .count();
+        const auto yaw = serial.PollYawFeedback(yawTimeoutMs);
+        const std::string yawStatus = !serial.IsOpen() || serial.IsSimulated() ? "disconnected" :
+            !yaw.seen ? "waiting" : yaw.valid ? "valid" :
+            (std::chrono::steady_clock::now() - yaw.received_at > std::chrono::milliseconds(yawTimeoutMs) ? "stale" : "invalid");
         const uint64_t frameId = ++frameCounter;
         const auto manualResets = dartResetRequests.exchange(0);
         if (manualResets) { dartTracker.reset(); dartTrackActive = false; }
@@ -1146,6 +1153,9 @@ int main(int argc, char **argv)
             debugFrame.candidate_count = detector.getCandidateCount();
             debugFrame.fps = fpsEma;
             debugFrame.processing_time_ms = processingTimeMs;
+            if (yaw.valid) debugFrame.yaw_actual_deg = yaw.degrees;
+            if (yaw.seen) debugFrame.yaw_received_epoch_ms = yaw.received_epoch_ms;
+            debugFrame.yaw_status = yawStatus;
             debugFrame.processing_fps_5s = webPerformance.processingFps;
             debugFrame.processing_p95_ms = webPerformance.processingP95Ms;
             debugFrame.processing_window_s = webPerformance.windowSeconds;
@@ -1198,6 +1208,9 @@ int main(int argc, char **argv)
             recordFrame.candidate_count = detector.getCandidateCount();
             recordFrame.fps = fpsEma;
             recordFrame.processing_time_ms = processingTimeMs;
+            if (yaw.valid) recordFrame.yaw_actual_deg = yaw.degrees;
+            if (yaw.seen) recordFrame.yaw_received_epoch_ms = yaw.received_epoch_ms;
+            recordFrame.yaw_status = yawStatus;
             recorder.submitFrame(recordFrame);
             if (crossing.valid)
                 recorder.appendObservation(referenceLine, crossing, observationTrackId, target.detected,

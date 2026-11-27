@@ -399,6 +399,10 @@ bool DebugTelemetry::sendFrame(const DebugFrame &frame)
         if (v && std::isfinite(*v)) oss << *v; else oss << "null";
         oss << ',';
     };
+    optionalFloat("yaw_actual_deg", frame.yaw_actual_deg);
+    oss << "\"yaw_received_epoch_ms\":";
+    if (frame.yaw_received_epoch_ms) oss << *frame.yaw_received_epoch_ms; else oss << "null";
+    oss << ",\"yaw_status\":\"" << jsonEscape(frame.yaw_status) << "\",";
     auto optionalCount = [&oss](const char *name, const std::optional<std::uint64_t> &v) {
         oss << '"' << name << "\":";
         if (v) oss << *v; else oss << "null";

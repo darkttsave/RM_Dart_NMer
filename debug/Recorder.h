@@ -76,6 +76,9 @@ struct RecordFrame
     int candidate_count = 0;
     double fps = 0.0;
     double processing_time_ms = 0.0;
+    std::optional<double> yaw_actual_deg;
+    std::optional<int64_t> yaw_received_epoch_ms;
+    std::string yaw_status = "waiting";
     bool dart_enabled = false;
     dartvision::TrackResult dart_result;
     double dart_processing_ms = 0.0;

@@ -90,6 +90,9 @@ struct DebugFrame
     std::optional<double> processing_fps_5s, processing_p95_ms, host_receive_fps, processing_window_s;
     std::optional<std::uint64_t> processing_window_frames, camera_missing_frames, camera_gap_events;
 
+    std::optional<double> yaw_actual_deg;
+    std::optional<int64_t> yaw_received_epoch_ms;
+    std::string yaw_status = "waiting";
 
     // 数据来源标识
     std::string source;

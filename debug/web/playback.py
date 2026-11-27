@@ -199,6 +199,9 @@ class ReplaySession:
                     "candidate_count": _to_int(row.get("candidate_count")),
                     "fps": _to_float(row.get("fps")),
                     "processing_time_ms": _to_float(row.get("processing_time_ms")),
+                    "yaw_actual_deg": (None if not row.get("yaw_actual_deg") else _to_float(row.get("yaw_actual_deg"))),
+                    "yaw_received_epoch_ms": (None if not row.get("yaw_received_epoch_ms") else _to_int(row.get("yaw_received_epoch_ms"))),
+                    "yaw_status": row.get("yaw_status") or "unavailable",
                 })
 
         self.video_index = []
