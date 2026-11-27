@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DART 视觉调试台 · 实时监测</title>
 <!-- M2-UI：实时监测界面重构（顶栏 / 左侧视频 / 右侧页签 / 底栏） -->
-<link rel="stylesheet" href="/static/dashboard.css?v=m4b">
+<link rel="stylesheet" href="/static/dashboard.css?v=r1-params">
 <style>
 /* 实时页少量覆盖样式（通用样式见 /static/dashboard.css） */
 .record-btn{
@@ -17,6 +17,7 @@
 .record-btn.danger{background:rgba(248,81,73,.12); border-color:rgba(248,81,73,.45); color:var(--red);}
 .record-btn.danger:hover{background:rgba(248,81,73,.2);}
 .record-btn:disabled{opacity:.55; cursor:not-allowed;}
+.quick-status{display:flex;gap:5px 14px;flex-wrap:wrap;padding:8px 10px;color:#a7b2bf;background:#111b24;border-bottom:1px solid #283543;font-size:12px}.quick-status b{color:#e6edf3}.quick-status span:last-child{width:100%}
 .charts-pane{overflow:hidden;}
 .charts-pane .charts{overflow-y:auto;}
 </style>
@@ -29,8 +30,8 @@
     <div class="brand"><b>DART</b><span>视觉调试台 · 实时监测</span></div>
     <nav class="workbench-nav" aria-label="工作台切换">
       <a class="wb-link active" href="/">视觉调试</a>
-      <a class="wb-link" href="/mechanical">机械与电控</a>
       <a class="wb-link" href="{{ playback_url }}" target="_blank" rel="noopener">历史回放</a>
+      <a class="wb-link" href="/experiments">实验记录</a>
     </nav>
     <span class="chip" id="linkChip" title="Flask 与 C++ 视觉程序之间的 TCP 调试帧链路状态">
       <i class="dot"></i><span id="linkText">等待视觉程序…</span>
@@ -59,6 +60,7 @@
         <span class="video-title">实时视觉画面</span>
         <span class="video-sub" id="videoSub">--</span>
         <span class="spacer"></span>
+        <button class="btn small gauge-toggle" id="devToggle" type="button" aria-controls="devGauge" aria-pressed="true" title="显示或隐藏画面内的水平偏差标尺">隐藏标尺</button>
         <span class="stage-badge live" id="liveBadge">● 无实时数据</span>
         <span class="stage-badge" id="resolutionBadge">-- × --</span>
       </div>
@@ -72,9 +74,7 @@
             3. 无视觉程序连接时本页面不会影响主链路
           </small>
         </div>
-      </div>
-      <div class="video-deviation-bar">
-        <div class="deviation-gauge video-deviation" id="devGauge" aria-label="水平偏差标尺">
+        <div class="deviation-gauge video-deviation" id="devGauge" role="group" aria-label="水平偏差标尺">
           <div class="dev-head">
             <span>水平偏差 offset_x</span>
             <span class="dev-value" id="devValue">--</span>
@@ -99,17 +99,17 @@
     <!-- 右：页签（状态面板 / 实时曲线） -->
     <aside class="side">
       <nav class="side-tabs" role="tablist" aria-label="右侧面板切换">
-        <button class="side-tab active" id="tabBtnStatus" type="button"
-                role="tab" aria-selected="true" aria-controls="tabStatus">状态面板</button>
+        <button class="side-tab" id="tabBtnStatus" type="button"
+                role="tab" aria-selected="false" aria-controls="tabStatus">状态面板</button>
         <button class="side-tab" id="tabBtnCharts" type="button"
                 role="tab" aria-selected="false" aria-controls="tabCharts">实时曲线</button>
-        <button class="side-tab" id="tabBtnParams" type="button"
-                role="tab" aria-selected="false" aria-controls="tabParams">参数调整</button>
+        <button class="side-tab active" id="tabBtnParams" type="button"
+                role="tab" aria-selected="true" aria-controls="tabParams">参数调整</button>
       </nav>
       <div class="tab-panels">
 
         <!-- 页签 A：状态面板 -->
-        <div class="tab-pane" id="tabStatus" role="tabpanel" aria-labelledby="tabBtnStatus">
+        <div class="tab-pane" id="tabStatus" role="tabpanel" aria-labelledby="tabBtnStatus" hidden>
           <!-- 识别状态 -->
           <section class="panel">
             <div class="panel-head">
@@ -234,7 +234,12 @@
         </div>
 
         <!-- 页签 C：参数调整（M3）：C++ 运行参数是权威值，应用与保存分离 -->
-        <div class="tab-pane" id="tabParams" role="tabpanel" aria-labelledby="tabBtnParams" hidden>
+        <div class="tab-pane" id="tabParams" role="tabpanel" aria-labelledby="tabBtnParams">
+          <div class="quick-status" aria-label="识别概况">
+            <span class="quick-status-title">识别概况</span>
+            <span>绿灯 <b id="quickGreen">--</b></span><span>中心 <b id="quickCenter">--</b></span><span>偏差 <b id="quickOffset">--</b></span>
+            <span>飞镖 <b id="quickDart">--</b></span><span id="quickReason">失败原因：--</span>
+          </div>
           <div class="param-toolbar">
             <div class="group">
               <span class="label">运行参数</span>
@@ -251,10 +256,10 @@
           </div>
           <div class="param-message" id="paramMessage">从 C++ 视觉程序读取参数中…</div>
           <div class="param-groups" id="paramGroups"></div>
-          <div class="note" style="margin-top:0; border-top:0; padding-top:0;">
-            应用：修改 C++ 实际运行参数（立即生效；录制期间写入 events.jsonl）；
-            保存：写入配置文件供下次启动使用。状态列格式为「运行值 / 配置文件值」。
-          </div>
+          <details class="param-help">
+            <summary>参数使用说明</summary>
+            <p>应用：修改当前运行参数，录制期间会记录修改事件。保存：写入配置文件供下次启动使用。参数右侧显示「运行值 / 配置文件值」。</p>
+          </details>
         </div>
 
       </div>
@@ -361,7 +366,7 @@ const MAX_POINTS = 6000;
 // ---------------------------------------------------------------------------
 // 右侧页签切换
 // ---------------------------------------------------------------------------
-let activeTab = "status";
+let activeTab = "params";
 function switchTab(name) {
   activeTab = name;
   const panes = { status: "tabStatus", charts: "tabCharts", params: "tabParams" };
@@ -416,6 +421,26 @@ function initDevGauge() {
 }
 initDevGauge();
 
+// 显示偏好仅保存在当前浏览器，不改变设备或录像配置。
+const gaugePreferenceKey = "dart.web.deviationGauge.visible";
+let gaugeVisible = true;
+try { gaugeVisible = localStorage.getItem(gaugePreferenceKey) !== "false"; } catch (_) {}
+function setGaugeVisible(visible) {
+  gaugeVisible = visible;
+  $("devGauge").hidden = !visible;
+  const toggle = $("devToggle");
+  toggle.setAttribute("aria-pressed", String(visible));
+  toggle.textContent = visible ? "隐藏标尺" : "显示标尺";
+  if (visible) requestAnimationFrame(drawDevGauge);
+}
+setGaugeVisible(gaugeVisible);
+$("devToggle").addEventListener("click", () => {
+  setGaugeVisible(!gaugeVisible);
+  try { localStorage.setItem(gaugePreferenceKey, String(gaugeVisible)); } catch (_) {}
+});
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => drawDevGauge()).observe($("devGauge"));
+else window.addEventListener("resize", drawDevGauge);
+
 async function refreshGaugeThreshold() {
   try {
     const resp = await fetch("/api/params", { cache: "no-store" });
@@ -460,7 +485,7 @@ function drawDevGauge() {
   const xOf = (v) => padX + plotW * (0.5 + Math.max(-1, Math.min(1, v / range)) / 2);
 
   // 基线
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.strokeStyle = "rgba(220,232,242,0.38)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(padX, yMid);
@@ -474,12 +499,12 @@ function drawDevGauge() {
   const ticks = [-400, -200, 0, 200, 400];
   for (const tick of ticks) {
     const x = xOf(tick);
-    ctx.strokeStyle = tick === 0 ? "rgba(230,237,243,0.5)" : "rgba(255,255,255,0.10)";
+    ctx.strokeStyle = tick === 0 ? "rgba(230,237,243,0.75)" : "rgba(220,232,242,0.40)";
     ctx.beginPath();
     ctx.moveTo(x, yTop);
     ctx.lineTo(x, yBot);
     ctx.stroke();
-    ctx.fillStyle = tick === 0 ? "rgba(230,237,243,0.65)" : "rgba(139,148,158,0.6)";
+    ctx.fillStyle = tick === 0 ? "rgba(230,237,243,0.95)" : "rgba(204,217,229,0.90)";
     ctx.fillText(String(tick), x, h - 3);
   }
 
@@ -502,17 +527,8 @@ function drawDevGauge() {
     ctx.setLineDash([]);
   }
 
-  if (!devGauge.detected || devGauge.offset === null) {
-    ctx.fillStyle = "rgba(139,148,158,0.8)";
-    ctx.font = "10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("未检测到有效目标 · 不显示偏差", midX, yMid - 8);
-    ctx.fillStyle = "rgba(110,118,129,0.6)";
-    ctx.font = "9px ui-monospace, monospace";
-    ctx.fillText("中心 0 = 图像中心", midX, yMid + 8);
-    return;
-  }
+  // 无有效目标时只保留基准线；状态文字在标尺顶部显示。
+  if (!devGauge.detected || devGauge.offset === null) return;
 
   const offset = devGauge.offset;
   const aligned = Math.abs(offset) < devGauge.threshold;
@@ -534,18 +550,12 @@ function drawDevGauge() {
   ctx.closePath();
   ctx.fill();
 
-  // 指针数值（画在指针上方，避开刻度）
-  ctx.fillStyle = color;
-  ctx.font = "9.5px ui-monospace, monospace";
-  ctx.textAlign = offset >= 0 ? "left" : "right";
-  ctx.textBaseline = "alphabetic";
-  const labelX = offset >= 0 ? px + 5 : px - 5;
-  ctx.fillText(`${offset > 0 ? "+" : ""}${offset.toFixed(1)}`, labelX, yTop + 8);
+
 }
 
 function updateDevGauge(frame) {
   const detected = !!frame.detected;
-  const offset = detected && Number.isFinite(Number(frame.offset_x)) ? Number(frame.offset_x) : null;
+  const offset = detected && frame.offset_x !== null && frame.offset_x !== undefined && Number.isFinite(Number(frame.offset_x)) ? Number(frame.offset_x) : null;
   devGauge.detected = detected;
   devGauge.offset = offset;
   devGauge.turnFlag = frame.turn_flag;
@@ -556,7 +566,7 @@ function updateDevGauge(frame) {
   if (thrEl) thrEl.textContent = `阈值 ±${devGauge.threshold.toFixed(1)} px`;
 
   if (!detected || offset === null) {
-    valueEl.textContent = "--";
+    valueEl.textContent = "无有效目标";
     valueEl.className = "dev-value invalid";
     turnEl.textContent = "turnFlag --";
     turnEl.className = "dev-turn invalid";
@@ -1139,7 +1149,9 @@ const PARAM_GROUP_META = {
   camera: { title: "相机参数", sub: "每帧下发" },
   dart: { title: "飞镖识别与跟踪", sub: "应用后即时生效，关键参数改变将重置轨迹" },
 };
-const PARAM_GROUP_ORDER = ["color", "shape", "tracking", "turn", "camera", "dart"];
+const QUICK_NAMES = new Set(["exposure", "gain", "bright_thresh", "green_weight_thresh", "dart_enabled", "dart_color", "dart_saturation_min", "dart_value_min", "dart_red_low_max", "dart_red_high_min", "dart_blue_hue_min", "dart_blue_hue_max"]);
+const PARAM_GROUP_ORDER = ["quick", "shape", "tracking", "turn", "dart"];
+PARAM_GROUP_META.quick = { title: "常用参数", sub: "相机 / 绿灯 / 飞镖" };
 
 function paramFieldDef(name) {
   return paramState.defs.find((d) => d.name === name) || null;
@@ -1169,11 +1181,28 @@ function syncParamButtons() {
   if (saveBtn) saveBtn.disabled = paramState.dirty.length === 0;
 }
 
+// 只改变路径的显示方式，不改变实际配置文件。
+const projectRoot = {{ project_root | tojson }};
+function displayConfigPath(path) {
+  if (!path) return "--";
+  if (!path.startsWith("/")) return path;
+  const normalize = (value) => {
+    const parts = [];
+    for (const part of value.split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") parts.pop(); else parts.push(part);
+    }
+    return "/" + parts.join("/");
+  };
+  const full = normalize(path), root = normalize(projectRoot);
+  return full.startsWith(root + "/") ? full.slice(root.length + 1) : `外部配置：${full.split("/").pop()}`;
+}
+
 function updateParamToolbar() {
   const stateEl = $("paramState");
   if (stateEl) {
     stateEl.textContent = paramState.configPath
-      ? `配置：${paramState.configPath}`
+      ? `配置：${displayConfigPath(paramState.configPath)}`
       : "配置：--";
     stateEl.title = paramState.configPath || "";
   }
@@ -1212,12 +1241,13 @@ function renderParamGroups() {
   if (!host) return;
   host.innerHTML = "";
   for (const group of PARAM_GROUP_ORDER) {
-    const defs = paramState.defs.filter((d) => d.group === group);
+    const defs = paramState.defs.filter((d) => group === "quick" ? QUICK_NAMES.has(d.name) : d.group === group && !QUICK_NAMES.has(d.name));
     if (!defs.length) continue;
     const meta = PARAM_GROUP_META[group] || { title: group, sub: "" };
-    const panel = document.createElement("section");
+    const panel = document.createElement("details");
     panel.className = "panel";
-    const head = document.createElement("div");
+    if (group === "quick") panel.open = true;
+    const head = document.createElement("summary");
     head.className = "panel-head";
     head.innerHTML = `<h2>${meta.title}<span class="panel-sub">${meta.sub}</span></h2>` +
       `<span class="tag">${defs.length} 项 · 运行/配置</span>`;
@@ -1366,7 +1396,7 @@ async function saveParams() {
       return;
     }
     applyParamData(data.params || { ok: false, error: "返回数据缺失" });
-    setParamMessage(`配置已保存：${data.saved_to || ""}`, "ok", 6000);
+    setParamMessage(`配置已保存：${displayConfigPath(data.saved_to)}`, "ok", 6000);
     syncParamButtons();
   } catch (error) {
     setParamMessage("保存失败：无法连接后端", "err", 6000);
@@ -1390,6 +1420,7 @@ ensureChartCards();
 connectStream();
 drawAll();
 refreshRecorder();
+refreshParams(true);
 </script>
 </body>
 </html>

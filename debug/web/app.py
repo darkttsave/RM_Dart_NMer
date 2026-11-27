@@ -21,13 +21,19 @@ M1 Web 调试后端（Flask）
 
 import argparse
 import json
+import os
+from pathlib import Path
+from urllib.request import urlopen
+from uuid import uuid4
+
+from experiments import Store, Conflict
 import socket
 import struct
 import threading
 import time
 from collections import deque
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
 
 MAGIC = b"DWDB"
 HEADER = struct.Struct("<4sBBHII")  # 16 bytes
@@ -258,6 +264,7 @@ receiver: FrameReceiver = None  # 在 main 中创建
 @app.route("/")
 def index():
     return render_template("index.html",
+                           project_root=str(Path(__file__).resolve().parents[2]),
                            playback_url=app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/"))
 
 
@@ -266,6 +273,117 @@ def mechanical():
     """M4：机械与电控调试台（无视频区，复用同一 Flask 服务与运行状态数据）。"""
     return render_template("mechanical.html",
                            playback_url=app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/"))
+
+
+def experiment_store():
+    default = Path.home() / ".local" / "share" / "dart" / "experiment_records"
+    return Store(app.config.get("EXPERIMENT_ROOT") or os.environ.get("DART_EXPERIMENT_ROOT") or default)
+
+
+@app.route("/experiments")
+def experiment_page():
+    return render_template("experiments.html", playback_url=app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/"))
+
+
+@app.route("/api/experiment-sessions")
+def experiment_sessions():
+    # Only the administrator-configured playback server is consulted, never a client URL.
+    url = app.config.get("PLAYBACK_URL", "http://127.0.0.1:5001/").rstrip("/") + "/api/sessions"
+    try:
+        with urlopen(url, timeout=2) as response:
+            data = json.load(response)
+        return jsonify(ok=True, sessions=[{k: s.get(k) for k in ("session", "started_at_wall", "status", "config_snapshot", "events_available")}
+                                          for s in data.get("sessions", [])])
+    except (OSError, ValueError):
+        return jsonify(ok=False, error="回放服务未连接，已关联的录像仍保留"), 503
+
+
+@app.route("/api/experiments", methods=["GET", "POST"])
+def experiments_list():
+    store = experiment_store()
+    if request.method == "GET":
+        return jsonify(ok=True, records=store.listing())
+    return save_experiment(store)
+
+
+@app.route("/api/experiments/<record_id>", methods=["GET", "PUT"])
+def experiment_detail(record_id):
+    store = experiment_store()
+    if request.method == "PUT":
+        return save_experiment(store, record_id)
+    try:
+        return jsonify(ok=True, record=store.read(record_id))
+    except FileNotFoundError:
+        return jsonify(ok=False, error="实验不存在"), 404
+    except (ValueError, OSError) as error:
+        return jsonify(ok=False, error=str(error)), 400
+
+
+def save_experiment(store, record_id=None):
+    try:
+        payload = request.get_json(silent=True)
+        # Validate only newly added links; old links remain editable if playback is offline.
+        old_sessions = set(store.read(record_id).get("sessions", [])) if record_id else set()
+        new_sessions = set(payload.get("sessions", [])) - old_sessions if isinstance(payload, dict) and isinstance(payload.get("sessions", []), list) else set()
+        if new_sessions:
+            result = experiment_sessions()
+            response, status = result if isinstance(result, tuple) else (result, 200)
+            if status != 200:
+                return jsonify(ok=False, error="回放服务未连接，无法验证新增录像"), 503
+            available = {s["session"] for s in response.get_json()["sessions"]}
+            if new_sessions - available:
+                return jsonify(ok=False, error="录像会话不存在"), 400
+        return jsonify(ok=True, record=store.save(payload, record_id))
+    except Conflict as error:
+        return jsonify(ok=False, error=str(error)), 409
+    except FileNotFoundError:
+        return jsonify(ok=False, error="实验不存在"), 404
+    except (ValueError, TypeError, OSError) as error:
+        return jsonify(ok=False, error=str(error)), 400
+
+
+@app.route("/api/experiments/<record_id>/attachments", methods=["POST"])
+def experiment_upload(record_id):
+    try:
+        store = experiment_store()
+        store.read(record_id)
+        uploaded = request.files.get("file")
+        if not uploaded or not uploaded.filename:
+            raise ValueError("请选择文件")
+        data = uploaded.stream.read(20 * 1024 * 1024 + 1)
+        if len(data) > 20 * 1024 * 1024:
+            raise ValueError("附件不能超过 20 MB")
+        suffix = Path(uploaded.filename).suffix.lower()
+        if not suffix or len(suffix) > 11 or not suffix[1:].isalnum():
+            suffix = ""
+        folder = store.path(record_id) / "attachments"
+        if folder.is_symlink():
+            raise ValueError("附件目录无效")
+        folder.mkdir(exist_ok=True)
+        name = uuid4().hex + suffix
+        with (folder / name).open("xb") as output:
+            output.write(data)
+        return jsonify(ok=True, attachment=name)
+    except FileNotFoundError:
+        return jsonify(ok=False, error="实验不存在"), 404
+    except (ValueError, OSError) as error:
+        return jsonify(ok=False, error=str(error)), 400
+
+
+@app.route("/api/experiments/<record_id>/attachments/<name>")
+def experiment_attachment(record_id, name):
+    try:
+        store = experiment_store()
+        record = store.read(record_id)
+        if name not in record.get("attachments", []):
+            raise FileNotFoundError()
+        folder = store.path(record_id) / "attachments"
+        path = folder / name
+        if folder.is_symlink() or path.is_symlink() or not path.is_file():
+            raise FileNotFoundError()
+        return send_file(path, as_attachment=True, download_name=name)
+    except (FileNotFoundError, ValueError, OSError):
+        return jsonify(ok=False, error="附件不存在"), 404
 
 
 @app.route("/video_feed")

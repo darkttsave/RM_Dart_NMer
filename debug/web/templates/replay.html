@@ -32,13 +32,14 @@
     <span class="chip warn" id="replayModeChip"
           title="历史回放只读取本地录制文件，不会向电控发送任何指令">回放模式：只读 · 不向电控发送指令</span>
     <select id="sessionSelect" title="选择录制会话"></select>
+    <button class="btn small" id="associateSession" type="button">关联实验</button>
     <span class="chip" id="statusChip">会话状态：--</span>
     <span class="chip info hide-md" id="sourceChip">数据来源：--</span>
     <span class="chip hide-md" id="durationChip">时长 --</span>
     <div class="spacer"></div>
     <span class="chip" id="missingChip">视频缺失 --</span>
     <a class="link" id="liveLink" href="{{ live_url }}" target="_blank" rel="noopener" {% if not live_url %}hidden{% endif %}>视觉调试</a>
-    <a class="link" id="mechLink" href="#" target="_blank" rel="noopener" hidden>机械与电控</a>
+    <a class="link" id="mechLink" href="#" target="_blank" rel="noopener" hidden>实验记录</a>
     <span id="clock" class="mono">--:--:--</span>
   </header>
 
@@ -672,7 +673,10 @@ async function init() {
       select.appendChild(opt);
     }
     select.onchange = () => loadSession(select.value);
-    await loadSession(sessions[0].dir);
+    const requestedSession = new URLSearchParams(location.search).get("session");
+    const selected = sessions.find(s => s.session === requestedSession) || sessions[0];
+    select.value = selected.dir;
+    await loadSession(selected.dir);
   } catch (error) {
     $("stagePlaceholder").innerHTML = `<b>回放服务连接失败</b><small>${error.message}</small>`;
   }
@@ -1179,11 +1183,16 @@ document.addEventListener("keydown", (e) => {
   const base = String(liveUrl || "").replace(/\/$/, "");
   const mechLink = document.getElementById("mechLink");
   if (base && mechLink) {
-    mechLink.href = base + "/mechanical";
+    mechLink.href = base + "/experiments";
     mechLink.hidden = false;
   }
 })();
 
+$("associateSession").addEventListener("click", () => {
+  const base = String({{ (live_url or "") | tojson }} || "").replace(/\/$/, "");
+  if (!base || !state.summary || !state.summary.session) { alert("请先连接实时工作台并选择录像会话"); return; }
+  window.location.href = base + "/experiments?session=" + encodeURIComponent(state.summary.session);
+});
 init();
 </script>
 </body>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实验记录 · DART 视觉调试台</title>
+<link rel="stylesheet" href="/static/dashboard.css?v=r1">
+<link rel="stylesheet" href="/static/experiments.css?v=r1">
+</head>
+<body class="experiments-body">
+<header class="topbar experiment-top">
+  <div class="brand"><b>DART</b><span>视觉调试台</span></div>
+  <nav class="workbench-nav" aria-label="工作台切换">
+    <a class="wb-link" href="/">实时调试</a>
+    <a class="wb-link" href="{{ playback_url }}">历史回放</a>
+    <a class="wb-link active" href="/experiments" aria-current="page">实验记录</a>
+  </nav>
+  <span class="spacer"></span><span class="chip">无需连接相机或电控</span>
+</header>
+<main class="experiment-layout">
+  <aside class="experiment-list">
+    <div class="list-heading"><div><h1>实验记录</h1><p>按测试阶段整理，随时补充。</p></div><button class="action" id="newRecord" type="button">新建</button></div>
+    <label class="search-label" for="search">搜索标题或编号</label><input id="search" type="search" placeholder="搜索实验">
+    <div id="recordList" class="record-list" aria-live="polite">正在读取记录…</div>
+  </aside>
+  <section class="experiment-editor" aria-label="实验编辑区">
+    <div id="emptyEditor" class="empty-editor"><h2>记录一次阶段性测试</h2><p>视觉、电控、机械和环境信息可以分次填写。<br>没有录像或设备时也可以创建。</p><button class="action" type="button" id="emptyNew">新建实验</button></div>
+    <form id="editor" hidden>
+      <div class="editor-head"><div><h2 id="editorHeading">新建实验</h2><p id="recordMeta">只有标题必填，其他内容可稍后补充。</p></div><div class="editor-actions"><button type="button" class="secondary" id="exportBtn" hidden>导出 JSON</button><button type="button" class="secondary" id="saveDraft">保存草稿</button><button type="button" class="action" id="confirmRecord">确认记录</button></div></div>
+      <div id="message" role="status" aria-live="polite"></div>
+      <div class="form-section"><h3>基本信息</h3><div class="field-grid"><label>实验标题 <em>必填</em><input name="title" required maxlength="200" placeholder="例如：16 米绿灯识别测试"></label><label>日期<input name="date" type="date"></label><label class="wide">测试目的<textarea name="purpose" rows="2" placeholder="这次阶段测试希望确认什么？"></textarea></label></div></div>
+      <details class="form-section"><summary>环境 <span>场地、距离、光照与干扰</span></summary><div class="field-grid" id="environmentFields"></div></details>
+      <details class="form-section"><summary>视觉 <span>相机、检测参数与识别结果</span></summary><div class="field-grid" id="visionFields"></div><p class="help">关联录像后，请在历史回放中查看该会话的参数快照与变更事件；旧录像可能缺少快照。</p></details>
+      <details class="form-section"><summary>电控 <span>目标、设定与异常</span></summary><div class="field-grid" id="controlFields"></div></details>
+      <details class="form-section"><summary>机械 <span>飞镖、机构版本与状态</span></summary><div class="field-grid" id="mechanicalFields"></div></details>
+      <details class="form-section" open><summary>发射明细 <span>同一次实验可记录多发</span></summary><p class="help">留空代表未填写；可填写“不适用”；数字 0 表示已确认的零。图像坐标与实际落点须分别填写参考基准。</p><div id="shots"></div><button class="secondary add-shot" type="button" id="addShot">添加一发</button></details>
+      <details class="form-section"><summary>结论 <span>现象、问题与后续调整</span></summary><div class="field-grid" id="conclusionFields"></div></details>
+      <details class="form-section"><summary>关联证据 <span>录像与现场附件</span></summary><p class="help">录像只保存引用，不复制视频。可从下方选择已有会话；回放未运行时仍可编辑记录。</p><div class="evidence-row"><select id="sessionChoices" aria-label="选择录像会话"><option value="">读取录像列表…</option></select><button class="secondary" id="addSession" type="button">关联录像</button><button class="secondary" id="refreshSessions" type="button">刷新</button></div><div id="sessions"></div><p class="help">附件请在首次保存后上传，单个文件最大 20 MB。</p><div class="evidence-row"><input type="file" id="attachmentFile" aria-label="选择附件"><button class="secondary" id="uploadAttachment" type="button">上传附件</button></div><div id="attachments"></div></details>
+    </form>
+  </section>
+</main>
+<script>window.playbackUrl = {{ playback_url | tojson }};</script>
+<script src="/static/experiments.js?v=r1"></script>
+</body></html>
