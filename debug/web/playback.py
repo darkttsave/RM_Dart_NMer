@@ -74,6 +74,7 @@ class VideoReader:
     """
 
     CACHE_MAX = 180
+    SEEK_DISTANCE = 12
 
     def __init__(self, path):
         self.path = path
@@ -111,8 +112,16 @@ class VideoReader:
         if index in self.cache:
             self.cache.move_to_end(index)
             return self.cache[index]
-        if self.cap is None or not self.cap.isOpened() or index < self.pos:
+        if self.cap is None or not self.cap.isOpened():
             if not self._open():
+                return None
+        # 远距离跳转使用容器索引；顺序播放保留连续读取。定位失败时回退到顺序解码。
+        if index < self.pos or index - self.pos > self.SEEK_DISTANCE:
+            seek_ok = self.cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+            actual = self.cap.get(cv2.CAP_PROP_POS_FRAMES) if seek_ok else -1
+            if seek_ok and abs(actual - index) < 0.5:
+                self.pos = index - 1
+            elif not self._open():
                 return None
         while self.pos < index:
             ok, frame = self.cap.read()
@@ -134,10 +143,12 @@ class VideoReader:
         index = int(index)
         if index < 0:
             return None
+        future = self._executor.submit(self._decode, index)
         try:
             # 单线程执行器：保证 cv2 调用串行且始终在同一个 worker 线程中
-            return self._executor.submit(self._decode, index).result(timeout=15)
+            return future.result(timeout=15)
         except Exception:  # noqa: BLE001
+            future.cancel()  # 已超时且仍在队列中的任务不应继续拖慢后续请求。
             return None
 
 

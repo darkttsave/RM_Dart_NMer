@@ -380,6 +380,7 @@ const state = {
   lastTick: 0,
   curVideoIndex: -1,
   frameSeq: 0,
+  frameLoading: false,
   videoElapsed: [],
   teleElapsed: [],
   speed: 1,
@@ -691,7 +692,8 @@ async function loadSession(dir) {
   state.t = 0;
   state.curVideoIndex = -1;
   state.playing = false;
-  state.frameSeq = 0;
+  state.frameSeq++;
+  state.frameLoading = false;
   chartKeyOrder = "";
   $("playBtn").textContent = "▶ 播放";
 
@@ -938,19 +940,37 @@ function renderConfigSnapshot(snapshot) {
 function requestFrame(videoIndex) {
   if (videoIndex < 0 || videoIndex === state.curVideoIndex) return;
   state.curVideoIndex = videoIndex;
-  const seq = ++state.frameSeq;
+  loadLatestFrame();
+}
+
+function loadLatestFrame() {
+  if (state.frameLoading || state.curVideoIndex < 0) return;
+  const videoIndex = state.curVideoIndex;
+  const seq = state.frameSeq;
+  const dir = state.dir;
+  state.frameLoading = true;
   const img = new Image();
   img.onload = () => {
     if (seq !== state.frameSeq) return;
-    $("videoImage").src = img.src;
-    $("stagePlaceholder").hidden = true;
+    // 播放时允许显示已完成的帧；暂停拖动时只显示最终选中的位置。
+    if ((state.playing && state.curVideoIndex >= 0) || videoIndex === state.curVideoIndex) {
+      $("videoImage").src = img.src;
+      $("stagePlaceholder").hidden = true;
+    }
+    state.frameLoading = false;
+    if (videoIndex !== state.curVideoIndex) loadLatestFrame();
   };
   img.onerror = () => {
     if (seq !== state.frameSeq) return;
-    $("stagePlaceholder").hidden = false;
-    $("stagePlaceholder").innerHTML = "<b>该时段视频帧不可读</b><small>可能是录制异常结束时未写入的文件尾部</small>";
+    state.frameLoading = false;
+    if (videoIndex !== state.curVideoIndex) {
+      loadLatestFrame();
+    } else {
+      $("stagePlaceholder").hidden = false;
+      $("stagePlaceholder").innerHTML = "<b>该时段视频帧不可读</b><small>可能是录制异常结束时未写入的文件尾部</small>";
+    }
   };
-  img.src = `/api/frame?dir=${encodeURIComponent(state.dir)}&index=${videoIndex}&_=${seq}`;
+  img.src = `/api/frame?dir=${encodeURIComponent(dir)}&index=${videoIndex}`;
 }
 
 function renderTelemetry(row) {
@@ -1023,6 +1043,7 @@ function updateAt(t) {
     $("vVideoElapsed").textContent = fmtMs(entry.elapsed_ms);
     $("videoTag").textContent = `video #${vi}`;
   } else {
+    state.curVideoIndex = -1;
     $("frameBadge").textContent = vi >= 0 ? `最近视频帧 #${vi}` : "video --";
     $("sourceFrameBadge").textContent = "帧 --";
     $("frameText").textContent = "帧 --（该时段无视频）";
