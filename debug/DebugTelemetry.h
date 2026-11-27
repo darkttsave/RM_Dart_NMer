@@ -32,6 +32,7 @@
 
 #include <opencv2/core.hpp>
 #include "tasks/dart/DartTracker.h"
+#include "tasks/dart/Observation.h"
 
 namespace webdebug
 {
@@ -49,6 +50,8 @@ struct DebugFrame
     std::optional<double> dart_source_time_ms;
     dartvision::TrackResult dart_result;
     std::vector<dartvision::Candidate> dart_candidates;
+    dartvision::Crossing dart_crossing;
+    uint64_t dart_track_id = 0;
 
     // 识别结果（GreenDetect::TargetInfo）
     bool detected = false;
@@ -86,6 +89,7 @@ struct DebugFrame
     double processing_time_ms = 0.0;
     std::optional<double> processing_fps_5s, processing_p95_ms, host_receive_fps, processing_window_s;
     std::optional<std::uint64_t> processing_window_frames, camera_missing_frames, camera_gap_events;
+
 
     // 数据来源标识
     std::string source;

@@ -60,12 +60,14 @@
         <span class="video-title">实时视觉画面</span>
         <span class="video-sub" id="videoSub">--</span>
         <span class="spacer"></span>
+        <button class="btn small gauge-toggle" id="referenceToggle" type="button" aria-controls="referenceOverlay" aria-pressed="true" title="仅控制参考线显示；观测需在参数中启用">隐藏参考线</button>
         <button class="btn small gauge-toggle" id="devToggle" type="button" aria-controls="devGauge" aria-pressed="true" title="显示或隐藏画面内的水平偏差标尺">隐藏标尺</button>
         <span class="stage-badge live" id="liveBadge">● 无实时数据</span>
         <span class="stage-badge" id="resolutionBadge">-- × --</span>
       </div>
       <div class="video-wrap" id="videoWrap">
         <img id="videoImage" src="/video_feed" alt="实时视觉画面">
+        <canvas id="referenceOverlay" aria-label="观测参考线" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
         <div class="placeholder" id="videoPlaceholder">
           <b>等待视觉程序调试数据</b>
           <small>
@@ -137,7 +139,8 @@
           <section class="panel">
             <div class="panel-head">
               <h2>飞镖识别<span class="panel-sub">检测与轨迹</span></h2>
-              <button class="btn small" id="dartResetBtn" type="button">重置飞镖跟踪</button>
+              <span><button class="btn small" id="dartSimulateFireBtn" type="button" title="仅触发模拟事件，不向电控发送信号">模拟发射</button>
+              <button class="btn small" id="dartResetBtn" type="button">重置飞镖跟踪</button></span>
             </div>
             <div class="panel-body">
               <div class="kv-grid">
@@ -150,6 +153,7 @@
               </div>
               <div class="note" id="dartReason">失败原因：--</div>
               <div class="note" id="dartResetMessage" aria-live="polite"></div>
+              <div class="note" id="dartSimulateMessage" aria-live="polite"></div>
             </div>
           </section>
 
@@ -387,6 +391,15 @@ function switchTab(name) {
 $("tabBtnStatus").addEventListener("click", () => switchTab("status"));
 $("tabBtnCharts").addEventListener("click", () => switchTab("charts"));
 $("tabBtnParams").addEventListener("click", () => switchTab("params"));
+$("dartSimulateFireBtn").addEventListener("click", async () => {
+  const button = $("dartSimulateFireBtn"); button.disabled = true;
+  try {
+    const response = await fetch("/api/dart/simulate-fire", {method:"POST"});
+    const data = await response.json();
+    $("dartSimulateMessage").textContent = data.ok ? "模拟事件已提交，仅窗口模式生效" : `模拟事件失败：${data.error || "未知错误"}`;
+  } catch (_) { $("dartSimulateMessage").textContent = "模拟事件失败：控制口不可用"; }
+  finally { button.disabled = false; }
+});
 $("dartResetBtn").addEventListener("click", async () => {
   const button = $("dartResetBtn");
   button.disabled = true;
@@ -441,10 +454,47 @@ $("devToggle").addEventListener("click", () => {
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => drawDevGauge()).observe($("devGauge"));
 else window.addEventListener("resize", drawDevGauge);
 
+// 浏览器显示偏好与参考线观测开关独立，不修改录像或算法。
+const referencePreferenceKey = "dart.web.referenceLine.visible";
+let referenceVisible = true, referenceParams = null;
+try { referenceVisible = localStorage.getItem(referencePreferenceKey) !== "false"; } catch (_) {}
+function drawLiveReference() {
+  const canvas = $("referenceOverlay"), wrap = $("videoWrap"), img = $("videoImage");
+  const bounds = wrap.getBoundingClientRect(), rect = img.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.round(bounds.width * scale); canvas.height = Math.round(bounds.height * scale);
+  const ctx = canvas.getContext("2d"); ctx.setTransform(scale, 0, 0, scale, 0, 0); ctx.clearRect(0, 0, bounds.width, bounds.height);
+  const p = referenceParams, f = state.latest;
+  if (!referenceVisible || !p || !Number(p.dart_reference_enabled) || !f || !f.image_width || !f.image_height || !img.naturalWidth) return;
+  const coords = [p.dart_reference_x1, p.dart_reference_y1, p.dart_reference_x2, p.dart_reference_y2];
+  if (coords.some(v => v == null || !Number.isFinite(Number(v)))) return;
+  const x0 = rect.left - bounds.left, y0 = rect.top - bounds.top;
+  const sx = rect.width / f.image_width, sy = rect.height / f.image_height;
+  ctx.strokeStyle = "#ffd351"; ctx.lineWidth = 1.5; ctx.beginPath();
+  ctx.moveTo(x0 + coords[0] * sx, y0 + coords[1] * sy);
+  ctx.lineTo(x0 + coords[2] * sx, y0 + coords[3] * sy); ctx.stroke();
+}
+function setReferenceVisible(visible) {
+  referenceVisible = visible;
+  const button = $("referenceToggle"); button.setAttribute("aria-pressed", String(visible));
+  button.textContent = visible ? "隐藏参考线" : "显示参考线";
+  drawLiveReference();
+}
+$("referenceToggle").addEventListener("click", () => {
+  setReferenceVisible(!referenceVisible);
+  try { localStorage.setItem(referencePreferenceKey, String(referenceVisible)); } catch (_) {}
+});
+$("videoImage").addEventListener("load", drawLiveReference);
+window.addEventListener("resize", drawLiveReference);
+setReferenceVisible(referenceVisible);
+
 async function refreshGaugeThreshold() {
   try {
     const resp = await fetch("/api/params", { cache: "no-store" });
     const data = await resp.json();
+    referenceParams = data.ok !== false ? data.running : null;
+    drawLiveReference();
     if (data.ok !== false && data.running && typeof data.running.turn_threshold === "number") {
       devGauge.threshold = Number(data.running.turn_threshold);
       $("devThreshold").textContent = `阈值 ±${devGauge.threshold.toFixed(1)} px`;
@@ -842,7 +892,9 @@ function renderPerfNote() {
 }
 
 function renderFrame(f) {
+  const oldSize = state.latest && `${state.latest.image_width}x${state.latest.image_height}`;
   state.latest = f;
+  if (oldSize !== `${f.image_width}x${f.image_height}`) drawLiveReference();
   const dart = f.dart || {};
   const dartStates = {waiting:"等待", captured:"捕获", tracking:"跟踪", lost:"暂时丢失", recaptured:"重新捕获", failed:"失败"};
   $("dartMode").textContent = dart.enabled ? `启用 · ${dart.color === "blue" ? "蓝色" : "红色"}` : "关闭";
@@ -1147,10 +1199,15 @@ const PARAM_GROUP_META = {
   tracking: { title: "追踪与连续帧判断", sub: "确认 / 丢失 / 跳变" },
   turn: { title: "转向与距离", sub: "转向阈值 / 距离阶段" },
   camera: { title: "相机参数", sub: "每帧下发" },
+  green_roi: { title: "绿灯 ROI", sub: "原图像素 · 默认关闭" },
+  dart_roi: { title: "飞镖 ROI", sub: "原图像素 · 默认关闭" },
+  dart_reference: { title: "观测参考线 A", sub: "两端坐标 · 原图像素 · 非落点" },
+  dart_window: { title: "模拟飞行窗口", sub: "未连接电控" },
+  dart_filter: { title: "飞镖可选筛选", sub: "须实拍验证" },
   dart: { title: "飞镖识别与跟踪", sub: "应用后即时生效，关键参数改变将重置轨迹" },
 };
 const QUICK_NAMES = new Set(["exposure", "gain", "bright_thresh", "green_weight_thresh", "dart_enabled", "dart_color", "dart_saturation_min", "dart_value_min", "dart_red_low_max", "dart_red_high_min", "dart_blue_hue_min", "dart_blue_hue_max"]);
-const PARAM_GROUP_ORDER = ["quick", "shape", "tracking", "turn", "dart"];
+const PARAM_GROUP_ORDER = ["quick", "green_roi", "dart_roi", "dart_filter", "dart_window", "dart_reference", "shape", "tracking", "turn", "dart"];
 PARAM_GROUP_META.quick = { title: "常用参数", sub: "相机 / 绿灯 / 飞镖" };
 
 function paramFieldDef(name) {
@@ -1262,7 +1319,7 @@ function renderParamGroups() {
       name.title = `${def.name} · 范围 ${def.min}~${def.max}` +
         (def.unit ? ` ${def.unit}` : "") + (def.hint ? ` · ${def.hint}` : "");
       name.innerHTML = `<b>${def.label}</b><span class="mono">${def.name}</span>`;
-      const isChoice = ["dart_color", "dart_enabled", "dart_draw_debug"].includes(def.name);
+      const isChoice = ["dart_color", "dart_enabled", "dart_draw_debug", "green_roi_enabled", "dart_roi_enabled", "dart_circularity_enabled", "dart_direction_enabled", "dart_window_enabled", "dart_reference_enabled"].includes(def.name);
       const input = document.createElement(isChoice ? "select" : "input");
       if (isChoice) {
         for (const [value, label] of (def.name === "dart_color" ? [[0, "红色"], [1, "蓝色"]] : [[0, "关闭"], [1, "开启"]]))
@@ -1325,6 +1382,8 @@ function applyParamData(data) {
   const firstBuild = paramState.defs.length === 0;
   paramState.defs = data.params || [];
   paramState.running = data.running || {};
+  referenceParams = paramState.running;
+  drawLiveReference();
   paramState.saved = data.saved || {};
   paramState.dirty = data.dirty || [];
   paramState.configPath = data.config_path || "";

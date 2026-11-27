@@ -51,6 +51,7 @@
         <span class="video-title">历史视频画面</span>
         <span class="video-sub" id="videoMeta">--</span>
         <span class="spacer"></span>
+        <button class="btn small" id="referenceToggle" type="button" aria-controls="referenceOverlay" aria-pressed="true" title="显示或隐藏叠加的参考线">隐藏参考线</button>
         <button class="btn small ghost" id="fsBtn" type="button"
                 title="全屏观看（双击画面也可切换，Esc 退出）">全屏</button>
         <span class="stage-badge" id="frameBadge">video --</span>
@@ -58,6 +59,7 @@
       </div>
       <div class="video-wrap" id="videoWrap">
         <img id="videoImage" alt="历史视频帧">
+        <canvas id="referenceOverlay" aria-label="录像参考线" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
         <div class="placeholder" id="stagePlaceholder">
           <b>正在加载录制会话…</b>
           <small>回放不连接工业相机与电控，不需要启动视觉主程序</small>
@@ -832,7 +834,8 @@ function renderEvents() {
   if (meta) {
     const manualCount = events.filter((e) => e.type === "manual_note").length;
     const resetCount = events.filter((e) => e.type === "dart_tracker_reset").length;
-    meta.textContent = `${events.length} 条（参数 ${events.length - manualCount - resetCount} · 人工 ${manualCount} · 重置 ${resetCount}）`;
+    const obsCount = events.filter((e) => e.type === "dart_reference_crossing").length;
+    meta.textContent = `${events.length} 条（参数 ${events.length - manualCount - resetCount - obsCount} · 观测 ${obsCount} · 人工 ${manualCount} · 重置 ${resetCount}）`;
   }
   if (!list) return;
   if (!events.length) {
@@ -856,6 +859,13 @@ function renderEvents() {
         `<span class="event-param"><b>人工记录</b><small>${esc(ev.note)}</small></span>` +
         `<span class="event-source">人工</span>` +
         `<span class="event-result ok">${esc(ev.result || "recorded")}</span>`;
+    } else if (ev.type === "dart_reference_crossing") {
+      const point = Array.isArray(ev.intersection) ? ev.intersection.map(v => Number(v).toFixed(1)).join(", ") : "--";
+      btn.title = `轨迹 ${ev.track_id}，框中心与参考线 ${ev.line_id} 的交点（像素）；不代表真实落点`;
+      btn.innerHTML = `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
+        `<span class="event-param"><b>参考线交点 ${esc(ev.line_id)}</b><small>轨迹 ${esc(ev.track_id)}</small></span>` +
+        `<span class="event-change">${esc(point)} px</span><span class="event-source">视觉</span>` +
+        `<span class="event-result ok">观测</span>`;
     } else if (ev.type === "dart_tracker_reset") {
       btn.title = `飞镖跟踪重置请求（frame ${ev.frame_id}）`;
       btn.innerHTML = `<span class="event-time mono">${fmtMs(ev.elapsed_ms)}</span>` +
@@ -1021,8 +1031,48 @@ function renderTelemetry(row) {
   }
 }
 
+// 根据当时参数快照和事件重建线的位置；无快照时不猜测。
+function drawReplayReference() {
+  const canvas = $("referenceOverlay"), wrap = $("videoWrap"), img = $("videoImage");
+  const bounds = wrap.getBoundingClientRect(), rect = img.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.round(bounds.width * scale); canvas.height = Math.round(bounds.height * scale);
+  const ctx = canvas.getContext("2d"); ctx.setTransform(scale,0,0,scale,0,0); ctx.clearRect(0,0,bounds.width,bounds.height);
+  const snapshot = state.summary && state.summary.config_snapshot && state.summary.config_snapshot.params;
+  if (!referenceVisible || !snapshot || snapshot.dart_reference_enabled === undefined || !img.naturalWidth || !img.naturalHeight) return;
+  const keys = ["dart_reference_enabled", "dart_reference_x1", "dart_reference_y1", "dart_reference_x2", "dart_reference_y2"];
+  const v = Object.fromEntries(keys.map(k => [k, snapshot[k]]));
+  for (const event of state.events) if (event.type === "parameter_changed" && event.elapsed_ms <= state.t && keys.includes(event.parameter)) v[event.parameter] = event.new_value;
+  if (!Number(v.dart_reference_enabled)) return;
+  const rowIndex = lastIndexLE(state.teleElapsed, state.t), row = rowIndex >= 0 ? state.telemetry[rowIndex] : null;
+  if (!row || !row.image_width || !row.image_height || keys.some(k => !Number.isFinite(Number(v[k])))) return;
+  const x0 = rect.left-bounds.left, y0 = rect.top-bounds.top;
+  const sx = rect.width / row.image_width, sy = rect.height / row.image_height;
+  ctx.strokeStyle = "#ffd351"; ctx.lineWidth = 1.5; ctx.beginPath();
+  ctx.moveTo(x0+v.dart_reference_x1*sx, y0+v.dart_reference_y1*sy);
+  ctx.lineTo(x0+v.dart_reference_x2*sx, y0+v.dart_reference_y2*sy); ctx.stroke();
+}
+const referencePreferenceKey = "dart.web.referenceLine.visible";
+let referenceVisible = true;
+try { referenceVisible = localStorage.getItem(referencePreferenceKey) !== "false"; } catch (_) {}
+function setReferenceVisible(visible) {
+  referenceVisible = visible;
+  const button = $("referenceToggle"); button.setAttribute("aria-pressed", String(visible));
+  button.textContent = visible ? "隐藏参考线" : "显示参考线";
+  drawReplayReference();
+}
+$("referenceToggle").addEventListener("click", () => {
+  setReferenceVisible(!referenceVisible);
+  try { localStorage.setItem(referencePreferenceKey, String(referenceVisible)); } catch (_) {}
+});
+setReferenceVisible(referenceVisible);
+$("videoImage").addEventListener("load", drawReplayReference);
+window.addEventListener("resize", drawReplayReference);
+
 function updateAt(t) {
   state.t = Math.max(0, Math.min(t, state.duration));
+  drawReplayReference();
   const timeline = $("timeline");
   timeline.value = String(Math.round(state.t));
   $("timeText").textContent = `${fmtMs(state.t)} / ${fmtMs(state.duration)}`;

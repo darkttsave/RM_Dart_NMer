@@ -63,3 +63,9 @@ target_link_libraries(test_green_debug_modes PRIVATE dart_vision)
 
 add_executable(test_web_performance tests/test_web_performance.cpp)
 target_include_directories(test_web_performance PRIVATE ${PROJECT_SOURCE_DIR})
+
+add_executable(test_p3_detection tests/test_p3_detection.cpp)
+target_link_libraries(test_p3_detection PRIVATE dart_vision)
+
+add_executable(test_p3_observation tests/test_p3_observation.cpp)
+target_link_libraries(test_p3_observation PRIVATE dart_vision)

@@ -19,6 +19,13 @@ turn_control:
   dist_near_thresh: 100.0
 
 detection:
+  # P3 软件 ROI：默认关闭；原图像素坐标。
+  roi:
+    enabled: 0
+    x: 0
+    y: 0
+    width: 0
+    height: 0
   min_radius: 10
   max_radius: 30
 
@@ -68,6 +75,32 @@ recording:
 
 # P2-A：飞镖候选与轨迹（初始参数尚未实拍标定；关闭时沿用原有绿灯流程）
 dart_detection:
+  # P3 可选筛选默认关闭，阈值需实拍验证。
+  roi:
+    enabled: 0
+    x: 0
+    y: 0
+    width: 0
+    height: 0
+  circularity:
+    enabled: 0
+    max: 0.8
+  direction:
+    enabled: 0
+    points: 4
+    min_displacement: 4.0
+  # 基地录像约 55 秒的参考示例（1440×1080），实际相机须重新确认；不是落点。
+  reference_line:
+    enabled: 0
+    x1: 600
+    y1: 692
+    x2: 840
+    y2: 692
+  window:
+    enabled: 0
+    delay_ms: 0
+    duration_ms: 1000
+    tracking_ms: 2000
   enabled: false
   draw_debug: true
   color: red                 # red 或 blue；不自动识别颜色

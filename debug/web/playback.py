@@ -237,6 +237,18 @@ class ReplaySession:
                             "old_value": _to_float(item.get("old_value"), 0.0),
                             "new_value": _to_float(item.get("new_value"), 0.0),
                             "result": str(item.get("result", "")),
+                            "line_id": str(item.get("line_id", "")),
+                            "line": item.get("line"),
+                            "intersection": item.get("intersection"),
+                            "green_valid": item.get("green_valid"),
+                            "green_center": item.get("green_center"),
+                            "image_size": item.get("image_size"),
+                            "track_id": item.get("track_id"),
+                            "feature": item.get("feature"),
+                            "coordinate_system": item.get("coordinate_system"),
+                            "previous_frame_id": item.get("previous_frame_id"),
+                            "timestamp_us": item.get("timestamp_us"),
+                            "source_time_ms": item.get("source_time_ms"),
                         })
             except OSError:
                 self.events = []

@@ -3,11 +3,24 @@
 #include <algorithm>
 
 namespace dartvision {
-std::vector<Candidate> DartDetector::detect(const cv::Mat &image) const {
+std::vector<Candidate> DartDetector::detect(const cv::Mat &image, DetectionDiagnostics *diagnostics) const {
+    if (diagnostics) *diagnostics = {};
     std::vector<Candidate> result;
     if (image.empty() || image.type() != CV_8UC3) return result;
+    cv::Rect roi(0, 0, image.cols, image.rows);
+    if (config_.roi_enabled) {
+        const cv::Rect r = config_.roi;
+        const bool valid = r.x >= 0 && r.y >= 0 && r.width > 0 && r.height > 0 &&
+                           r.x < image.cols && r.y < image.rows &&
+                           r.width <= image.cols - r.x && r.height <= image.rows - r.y;
+        if (!valid) {
+            if (diagnostics) diagnostics->invalid_roi = true;
+            return result; // 无效 ROI 不静默回退成可能误检的全图
+        }
+        roi = r;
+    }
     cv::Mat hsv, mask;
-    cv::cvtColor(image, hsv, cv::COLOR_BGR2HSV);
+    cv::cvtColor(image(roi), hsv, cv::COLOR_BGR2HSV);
     if (config_.color == "red") {
         cv::Mat high;
         cv::inRange(hsv, cv::Scalar(0, config_.saturation_min, config_.value_min),
@@ -30,7 +43,19 @@ std::vector<Candidate> DartDetector::detect(const cv::Mat &image) const {
         const double aspect = box.height ? static_cast<double>(box.width) / box.height : 0;
         if (area < config_.min_area || area > config_.max_area ||
             aspect < config_.min_aspect || aspect > config_.max_aspect) continue;
-        result.push_back({cv::Point2f(box.x + box.width * 0.5f, box.y + box.height * 0.5f), box, area});
+        if (config_.circularity_filter_enabled) {
+            const double perimeter = cv::arcLength(contour, true);
+            // 面积/周长退化时不作圆形判定，避免除零和将碎片当作圆。
+            if (area > 0.0 && perimeter > 1.0) {
+                const double circularity = 4.0 * CV_PI * area / (perimeter * perimeter);
+                if (circularity >= config_.max_circularity) {
+                    if (diagnostics) ++diagnostics->circularity_rejected;
+                    continue;
+                }
+            }
+        }
+        cv::Rect fullBox(box.x + roi.x, box.y + roi.y, box.width, box.height);
+        result.push_back({cv::Point2f(fullBox.x + fullBox.width * 0.5f, fullBox.y + fullBox.height * 0.5f), fullBox, area});
     }
     return result;
 }

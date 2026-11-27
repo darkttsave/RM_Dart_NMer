@@ -420,6 +420,31 @@ RuntimeParams::RuntimeParams()
     add("dart_max_lost_frames", "飞镖容许丢帧", "", "dart", "dart_detection", "max_lost_frames", true, 0, 1000, "飞镖检测参数");
     add("dart_max_track_points", "轨迹点上限", "", "dart", "dart_detection", "max_track_points", true, 2, 1000, "飞镖检测参数");
     add("dart_draw_debug", "飞镖标注", "", "dart", "dart_detection", "draw_debug", true, 0, 1, "飞镖检测参数");
+
+    add("green_roi_enabled", "绿灯启用 ROI", "", "green_roi", "detection.roi", "enabled", true, 0, 1, "原图像素；无效 ROI 禁止输出目标");
+    add("green_roi_x", "绿灯ROI 左上 X", "", "green_roi", "detection.roi", "x", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("green_roi_y", "绿灯ROI 左上 Y", "", "green_roi", "detection.roi", "y", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("green_roi_width", "绿灯ROI 宽", "", "green_roi", "detection.roi", "width", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("green_roi_height", "绿灯ROI 高", "", "green_roi", "detection.roi", "height", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_roi_enabled", "飞镖启用 ROI", "", "dart_roi", "dart_detection.roi", "enabled", true, 0, 1, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_roi_x", "飞镖ROI 左上 X", "", "dart_roi", "dart_detection.roi", "x", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_roi_y", "飞镖ROI 左上 Y", "", "dart_roi", "dart_detection.roi", "y", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_roi_width", "飞镖ROI 宽", "", "dart_roi", "dart_detection.roi", "width", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_roi_height", "飞镖ROI 高", "", "dart_roi", "dart_detection.roi", "height", true, 0, 100000, "原图像素；无效 ROI 禁止输出目标");
+    add("dart_circularity_enabled", "飞镖圆形过滤", "", "dart_filter", "dart_detection.circularity", "enabled", true, 0, 1, "默认关闭；实拍验证后启用");
+    add("dart_circularity_max", "飞镖圆形度上限", "", "dart_filter", "dart_detection.circularity", "max", false, 0, 1.5, "达到阈值的候选被拒绝");
+    add("dart_direction_enabled", "飞镖方向约束", "", "dart_filter", "dart_detection.direction", "enabled", true, 0, 1, "默认关闭；Y 轴向下为正");
+    add("dart_direction_points", "方向观察点数", "帧", "dart_filter", "dart_detection.direction", "points", true, 2, 100, "多帧判断，允许短时反向抖动");
+    add("dart_direction_min_displacement", "反向拒绝位移", "px", "dart_filter", "dart_detection.direction", "min_displacement", false, 0, 100000, "多帧向上位移达到该阈值时拒绝");
+    add("dart_window_enabled", "模拟发射窗口", "", "dart_window", "dart_detection.window", "enabled", true, 0, 1, "默认关闭；仅模拟事件，未接电控");
+    add("dart_window_delay_ms", "窗口启动延迟", "ms", "dart_window", "dart_detection.window", "delay_ms", true, 0, 60000, "模拟发射后等待时间");
+    add("dart_window_duration_ms", "窗口持续时间", "ms", "dart_window", "dart_detection.window", "duration_ms", true, 1, 60000, "仅允许在窗口内建立新轨迹");
+    add("dart_window_tracking_ms", "已建立轨迹最长时间", "ms", "dart_window", "dart_detection.window", "tracking_ms", true, 1, 60000, "从轨迹建立时计时");
+    add("dart_reference_enabled", "参考线 A", "", "dart_reference", "dart_detection.reference_line", "enabled", true, 0, 1, "默认关闭；仅图像观测");
+    add("dart_reference_x1", "参考线 A 起点 X", "px", "dart_reference", "dart_detection.reference_line", "x1", true, 0, 100000, "全图像素坐标");
+    add("dart_reference_y1", "参考线 A 起点 Y", "px", "dart_reference", "dart_detection.reference_line", "y1", true, 0, 100000, "全图像素坐标");
+    add("dart_reference_x2", "参考线 A 终点 X", "px", "dart_reference", "dart_detection.reference_line", "x2", true, 0, 100000, "全图像素坐标");
+    add("dart_reference_y2", "参考线 A 终点 Y", "px", "dart_reference", "dart_detection.reference_line", "y2", true, 0, 100000, "全图像素坐标");
 }
 
 void RuntimeParams::initialize(const std::map<std::string, double> &from_yaml)
@@ -464,6 +489,27 @@ void RuntimeParams::initialize(const std::map<std::string, double> &from_yaml)
         {"dart_max_lost_frames", 5},
         {"dart_max_track_points", 100},
         {"dart_draw_debug", 1},
+        {"green_roi_enabled", 0},
+        {"green_roi_x", 0},
+        {"green_roi_y", 0},
+        {"green_roi_width", 0},
+        {"green_roi_height", 0},
+        {"dart_roi_enabled", 0},
+        {"dart_roi_x", 0},
+        {"dart_roi_y", 0},
+        {"dart_roi_width", 0},
+        {"dart_roi_height", 0},
+        {"dart_circularity_enabled", 0},
+        {"dart_circularity_max", 0.8},
+        {"dart_direction_enabled", 0},
+        {"dart_direction_points", 4},
+        {"dart_direction_min_displacement", 4},
+        {"dart_window_enabled", 0},
+        {"dart_window_delay_ms", 0},
+        {"dart_window_duration_ms", 1000},
+        {"dart_window_tracking_ms", 2000},
+        {"dart_reference_enabled", 0}, {"dart_reference_x1", 0}, {"dart_reference_y1", 0},
+        {"dart_reference_x2", 0}, {"dart_reference_y2", 0},
     };
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -571,6 +617,14 @@ bool RuntimeParams::validateCross(const Snapshot &candidate, std::string *error)
     {
         *error = "近距离阈值不能大于远距离阈值";
         return false;
+    }
+    if (at("dart_reference_enabled") && at("dart_reference_x1") == at("dart_reference_x2") &&
+        at("dart_reference_y1") == at("dart_reference_y2")) {
+        *error = "参考线两端点不能相同"; return false;
+    }
+    if ((at("green_roi_enabled") && (at("green_roi_width") < 1 || at("green_roi_height") < 1)) ||
+        (at("dart_roi_enabled") && (at("dart_roi_width") < 1 || at("dart_roi_height") < 1))) {
+        *error = "启用 ROI 时宽高必须为正"; return false;
     }
     if (at("dart_min_area") > at("dart_max_area") || at("dart_min_aspect") > at("dart_max_aspect") ||
         at("dart_blue_hue_min") > at("dart_blue_hue_max") || at("dart_red_low_max") >= at("dart_red_high_min") ||
@@ -706,10 +760,11 @@ void RuntimeParams::emitEvent(const std::string &name, const std::string &source
 
 bool RuntimeParams::saveToYaml(const std::string &path, std::string *error)
 {
-    Snapshot snapshot_copy;
+    Snapshot snapshot_copy, saved_copy;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         snapshot_copy = values_;
+        saved_copy = saved_;
     }
     std::string cross_error;
     if (!validateCross(snapshot_copy, &cross_error))
@@ -747,7 +802,7 @@ bool RuntimeParams::saveToYaml(const std::string &path, std::string *error)
             if (def.name == "dart_enabled" || def.name == "dart_draw_debug") value_text = it->second == 0 ? "false" : "true";
             if (replaceYamlScalar(text, splitPath(def.yaml_section), def.yaml_key, value_text))
                 ++replaced_count;
-            else
+            else if (!saved_copy.count(def.name) || std::abs(saved_copy.at(def.name) - it->second) > 1e-9)
                 missing.push_back(def.name);
         }
         if (!missing.empty())

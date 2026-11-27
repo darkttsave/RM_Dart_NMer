@@ -30,6 +30,7 @@
 #include "tasks/dart/GreenDetect.h"
 #include "tasks/dart/DartDetector.h"
 #include "tasks/dart/DartTracker.h"
+#include "tasks/dart/Observation.h"
 #include "tools/Utils.h"
 #include "tools/PerformanceStats.h"
 #include "tools/WebPerformanceWindow.h"
@@ -47,6 +48,7 @@ struct DartDetectionResult
 {
     std::vector<dartvision::Candidate> candidates;
     double elapsedMs = 0.0;
+    dartvision::DetectionDiagnostics diagnostics;
 };
 
 // 单个长期运行的工作线程；每帧汇合后才提交下一帧，避免乱序和积压。
@@ -64,9 +66,10 @@ public:
     {
         std::packaged_task<DartDetectionResult()> task([image, detector = std::move(detector)] {
             const auto start = std::chrono::steady_clock::now();
-            auto candidates = detector.detect(image);
+            dartvision::DetectionDiagnostics diagnostics;
+            auto candidates = detector.detect(image, &diagnostics);
             return DartDetectionResult{std::move(candidates),
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count()};
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), diagnostics};
         });
         auto result = task.get_future();
         { std::lock_guard<std::mutex> lock(mutex_); pending_ = std::move(task); }
@@ -235,6 +238,7 @@ int main(int argc, char **argv)
     dartvision::DetectorConfig dartDetectorConfig;
     dartvision::TrackerConfig dartTrackerConfig;
     std::string loadedConfigPath;
+    std::map<std::string, double> p3Initial;
 
     // Web 调试数据发布配置（config/debug.yaml 的 web_debug 段，可被命令行覆盖）
     bool webDebugEnabled = true;
@@ -281,6 +285,26 @@ int main(int argc, char **argv)
         if (!loaded)
         {
             throw std::runtime_error("配置文件加载失败");
+        }
+
+        // P3 新字段缺失时使用内置默认；不要求旧录像配置升级。
+        auto readP3 = [&](const YAML::Node &section, const std::string &prefix,
+                          std::initializer_list<const char *> keys) {
+            if (!section || !section.IsMap()) return;
+            for (const auto *key : keys) if (section[key]) {
+                const auto text = section[key].as<std::string>();
+                if (text == "true" || text == "false") p3Initial[prefix + key] = text == "true" ? 1.0 : 0.0;
+                else p3Initial[prefix + key] = section[key].as<double>();
+            }
+        };
+        if (config["detection"]) readP3(config["detection"]["roi"], "green_roi_", {"enabled", "x", "y", "width", "height"});
+        if (config["dart_detection"]) {
+            const auto d = config["dart_detection"];
+            readP3(d["roi"], "dart_roi_", {"enabled", "x", "y", "width", "height"});
+            readP3(d["circularity"], "dart_circularity_", {"enabled", "max"});
+            readP3(d["direction"], "dart_direction_", {"enabled", "points", "min_displacement"});
+            readP3(d["window"], "dart_window_", {"enabled", "delay_ms", "duration_ms", "tracking_ms"});
+            readP3(d["reference_line"], "dart_reference_", {"enabled", "x1", "y1", "x2", "y2"});
         }
 
         if (config["dart_detection"])
@@ -489,6 +513,17 @@ int main(int argc, char **argv)
             {"dart_max_lost_frames", static_cast<double>(dartTrackerConfig.max_lost_frames)},
             {"dart_max_track_points", static_cast<double>(dartTrackerConfig.max_points)},
         };
+        initial.insert(p3Initial.begin(), p3Initial.end());
+        // 对新字段在启动时执行范围检查，防止异常浮点数被转换成 ROI 坐标。
+        for (const auto &def : runtimeParams.definitions()) {
+            if (!p3Initial.count(def.name)) continue;
+            const double value = initial.at(def.name);
+            if (!std::isfinite(value) || value < def.min_value || value > def.max_value ||
+                (def.is_int && std::floor(value) != value)) {
+                std::cerr << "[P3] 无效参数 " << def.name << "，使用安全默认值" << std::endl;
+                initial.erase(def.name);
+            }
+        }
         runtimeParams.initialize(initial);
         if (!loadedConfigPath.empty())
             runtimeParams.setConfigPath(std::filesystem::absolute(loadedConfigPath).string());
@@ -548,6 +583,10 @@ int main(int argc, char **argv)
     GreenDetect detector;
     dartvision::DartDetector dartDetector(dartDetectorConfig);
     dartvision::DartTracker dartTracker(dartTrackerConfig);
+    dartvision::FlightWindow flightWindow;
+    bool dartTrackActive = false;
+    uint64_t simulatedFireEventId = 0;
+    uint64_t observationTrackId = 0;
     detector.setTurnThreshold(turnThreshold);
     detector.setDistanceThresholds(distFarThresh, distNearThresh);
 
@@ -679,8 +718,10 @@ int main(int argc, char **argv)
     recordOptions.runtime_params_json = runtimeParams.runningJson();
     recordOptions.app_version = "DART-WEB-M3 (base M2 commit 9adb3f0)";
     std::atomic<unsigned> dartResetRequests{0};
+    std::atomic<unsigned> dartSimulatedFireRequests{0};
     webdebug::Recorder recorder;
     recorder.setDartResetRequest([&dartResetRequests]() { dartResetRequests.fetch_add(1); });
+    recorder.setDartSimulatedFireRequest([&dartSimulatedFireRequests]() { dartSimulatedFireRequests.fetch_add(1); });
     recorder.setRuntimeParams(&runtimeParams);
     // 参数实际生效 -> 若正在录制则追加 events.jsonl（未录制时不写事件，只更新运行参数）
     runtimeParams.setEventSink([&recorder](const webdebug::ParamChangeEvent &event) {
@@ -836,6 +877,9 @@ int main(int argc, char **argv)
         }
 
         // M3：把本帧参数快照同步到识别器（参数不变时与 M2 行为完全一致）
+        detector.setRoi(runtimeValue("green_roi_enabled") != 0,
+            cv::Rect(static_cast<int>(runtimeValue("green_roi_x")), static_cast<int>(runtimeValue("green_roi_y")),
+                     static_cast<int>(runtimeValue("green_roi_width")), static_cast<int>(runtimeValue("green_roi_height"))));
         detector.setBrightThresh(static_cast<int>(std::lround(runtimeValue("bright_thresh"))));
         detector.setGreenWeightThresh(static_cast<float>(runtimeValue("green_weight_thresh")));
         detector.setShapeFilter(runtimeValue("min_circularity"), runtimeValue("min_aspect_ratio"),
@@ -858,6 +902,14 @@ int main(int argc, char **argv)
         appliedDartRevision = dartRevision;
         dartEnabled = runtimeValue("dart_enabled") != 0;
         dartAnnotate = runtimeValue("dart_draw_debug") != 0;
+        dartDetectorConfig.roi_enabled = runtimeValue("dart_roi_enabled") != 0;
+        dartDetectorConfig.roi = cv::Rect(static_cast<int>(runtimeValue("dart_roi_x")), static_cast<int>(runtimeValue("dart_roi_y")),
+                                         static_cast<int>(runtimeValue("dart_roi_width")), static_cast<int>(runtimeValue("dart_roi_height")));
+        dartDetectorConfig.circularity_filter_enabled = runtimeValue("dart_circularity_enabled") != 0;
+        dartDetectorConfig.max_circularity = runtimeValue("dart_circularity_max");
+        dartTrackerConfig.direction_enabled = runtimeValue("dart_direction_enabled") != 0;
+        dartTrackerConfig.direction_observation_points = static_cast<int>(runtimeValue("dart_direction_points"));
+        dartTrackerConfig.direction_min_displacement = runtimeValue("dart_direction_min_displacement");
         dartDetectorConfig.color = runtimeValue("dart_color") == 1 ? "blue" : "red";
         dartDetectorConfig.saturation_min = static_cast<int>(runtimeValue("dart_saturation_min"));
         dartDetectorConfig.value_min = static_cast<int>(runtimeValue("dart_value_min"));
@@ -875,8 +927,25 @@ int main(int argc, char **argv)
         dartTrackerConfig.max_lost_frames = static_cast<int>(runtimeValue("dart_max_lost_frames"));
         dartTrackerConfig.max_points = static_cast<int>(runtimeValue("dart_max_track_points"));
         dartDetector = dartvision::DartDetector(dartDetectorConfig);
+        const int64_t windowNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool windowEnabled = runtimeValue("dart_window_enabled") != 0;
+        flightWindow.configure({windowEnabled, static_cast<int64_t>(runtimeValue("dart_window_delay_ms")),
+                                static_cast<int64_t>(runtimeValue("dart_window_duration_ms")),
+                                static_cast<int64_t>(runtimeValue("dart_window_tracking_ms"))});
+        if (resetDart) { dartTracker = dartvision::DartTracker(dartTrackerConfig); dartTrackActive = false; }
+        const auto fireRequests = dartSimulatedFireRequests.exchange(0);
+        if (fireRequests && windowEnabled) {
+            flightWindow.trigger(++simulatedFireEventId, windowNow);
+            dartTracker.reset(); dartTrackActive = false;
+        }
+        if (dartTrackActive && !flightWindow.allowsExisting(windowNow)) {
+            dartTracker.reset(); dartTrackActive = false;
+        }
+        const bool runDart = dartEnabled && (dartTrackActive ? flightWindow.allowsExisting(windowNow) : flightWindow.allowsNew(windowNow));
+        if (dartEnabled && !runDart) dartTracker.reset();
         std::future<DartDetectionResult> dartFuture;
-        if (dartWorker && dartEnabled)
+        if (dartWorker && runDart)
             dartFuture = dartWorker->submit(image, dartDetector);
 
         // 主循环帧率（含采集/显示开销）与识别处理耗时：来自实际运行，非估算
@@ -890,32 +959,52 @@ int main(int argc, char **argv)
                                              detectEndTime.time_since_epoch())
                                              .count();
         const uint64_t frameId = ++frameCounter;
-        if (resetDart) dartTracker = dartvision::DartTracker(dartTrackerConfig);
         const auto manualResets = dartResetRequests.exchange(0);
-        if (manualResets) dartTracker.reset();
+        if (manualResets) { dartTracker.reset(); dartTrackActive = false; }
         dartvision::TrackResult dartResult;
+        dartvision::ReferenceLine referenceLine{"A", {runtimeValue("dart_reference_x1"), runtimeValue("dart_reference_y1")},
+                                                     {runtimeValue("dart_reference_x2"), runtimeValue("dart_reference_y2")}};
+        const bool referenceEnabled = runtimeValue("dart_reference_enabled") != 0;
+        dartvision::Crossing crossing;
+        crossing.line_id = "A";
+        crossing.reason = referenceEnabled ? "no_confirmed_track" : "disabled";
         std::vector<dartvision::Candidate> dartCandidates;
+        dartvision::DetectionDiagnostics dartDiagnostics;
         const auto overlayStart = PerformanceStats::Clock::now();
         cv::Mat annotatedDebug = detector.getDebugImage();
         double dartProcessingMs = 0.0;
         double dartBlockedMs = 0.0;
-        if (dartEnabled)
+        if (runDart)
         {
             const auto blockedStart = std::chrono::steady_clock::now();
             double detectionMs = 0.0;
             if (dartWorker) {
                 auto detection = dartFuture.get();
                 dartCandidates = std::move(detection.candidates);
+                dartDiagnostics = detection.diagnostics;
                 detectionMs = detection.elapsedMs;
             } else {
                 const auto dartStart = std::chrono::steady_clock::now();
-                dartCandidates = dartDetector.detect(image);
+                dartCandidates = dartDetector.detect(image, &dartDiagnostics);
                 detectionMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dartStart).count();
             }
             const auto trackStart = std::chrono::steady_clock::now();
             if (frameSource && frameSource->looped()) dartTracker.reset();
             dartResult = dartTracker.update(dartCandidates, frameId, frameTimestampUs,
                                              frameSource ? frameSource->sourceTimeMs() : std::nullopt);
+            if (dartResult.track_state == "captured") ++observationTrackId;
+            if (referenceEnabled && dartResult.detected && dartResult.track_valid && dartResult.track_points.size() >= 2) {
+                const auto &points = dartResult.track_points;
+                const bool inside = referenceLine.a.x < image.cols && referenceLine.b.x < image.cols &&
+                                    referenceLine.a.y < image.rows && referenceLine.b.y < image.rows;
+                if (inside) crossing = dartvision::measureCrossing(referenceLine, points[points.size()-2], points.back());
+                else crossing.reason = "line_outside_image";
+            }
+            if (dartResult.track_valid && !dartTrackActive) flightWindow.established(windowNow);
+            dartTrackActive = dartResult.track_valid;
+            if (dartDiagnostics.invalid_roi) dartResult.failure_reason = "invalid_roi";
+            else if (dartCandidates.empty() && dartDiagnostics.circularity_rejected)
+                dartResult.failure_reason = "circularity_rejected";
             dartProcessingMs = detectionMs + std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - trackStart).count();
             dartBlockedMs = std::chrono::duration<double, std::milli>(
@@ -935,6 +1024,7 @@ int main(int argc, char **argv)
                             cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 220, 0), 1);
             }
         }
+        if (dartEnabled && !runDart) dartResult.failure_reason = "window_closed";
         if (dartEnabled) perf.add(perf.dart, dartProcessingMs);
         if (webDebugEnabled) webPerformance.processed(PerformanceStats::Clock::now(), processingTimeMs + dartProcessingMs);
         perf.add(perf.overlay, std::max(0.0, PerformanceStats::ms(overlayStart, PerformanceStats::Clock::now()) - dartBlockedMs));
@@ -1027,6 +1117,8 @@ int main(int argc, char **argv)
             debugFrame.dart_timestamp_us = frameTimestampUs;
             debugFrame.dart_source_time_ms = dartEnabled && frameSource ? frameSource->sourceTimeMs() : std::nullopt;
             debugFrame.dart_result = dartResult;
+            debugFrame.dart_crossing = crossing;
+            debugFrame.dart_track_id = observationTrackId;
             // 限制单帧网络诊断体积；candidate_count 仍保留完整数量。
             debugFrame.dart_candidates.assign(dartCandidates.begin(), dartCandidates.begin() +
                 std::min<std::size_t>(dartCandidates.size(), 128));
@@ -1107,6 +1199,9 @@ int main(int argc, char **argv)
             recordFrame.fps = fpsEma;
             recordFrame.processing_time_ms = processingTimeMs;
             recorder.submitFrame(recordFrame);
+            if (crossing.valid)
+                recorder.appendObservation(referenceLine, crossing, observationTrackId, target.detected,
+                                           target.center, image.cols, image.rows);
         }
         perf.add(perf.submit, PerformanceStats::ms(submitStart, PerformanceStats::Clock::now()));
 

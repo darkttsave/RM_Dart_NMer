@@ -1002,6 +1002,32 @@ bool Recorder::appendManualNote(const std::string &note)
     return true;
 }
 
+void Recorder::appendObservation(const dartvision::ReferenceLine &line, const dartvision::Crossing &crossing,
+                                 uint64_t track_id, bool green_valid, cv::Point2f green_center,
+                                 int image_width, int image_height)
+{
+    if (!crossing.valid) return;
+    // 两个端点均须属于当前会话；锁定会话避免停止/重启时写入另一段录像。
+    std::lock_guard<std::mutex> session_lock(session_mutex_);
+    if (!recording_.load() || session_start_us_ <= 0 || crossing.before_timestamp_us < session_start_us_) return;
+    const int64_t elapsed = crossing.after_timestamp_us - session_start_us_;
+    std::ostringstream o;
+    o << "{\"type\":\"dart_reference_crossing\",\"source\":\"vision\",\"feature\":\"bbox_center\","
+      << "\"coordinate_system\":\"full_image_top_left_px\",\"valid\":true,\"track_id\":" << track_id
+      << ",\"frame_id\":" << crossing.after_frame << ",\"previous_frame_id\":" << crossing.before_frame
+      << ",\"timestamp_us\":" << crossing.after_timestamp_us << ",\"elapsed_us\":" << elapsed
+      << ",\"source_time_ms\":";
+    if (crossing.interpolated_source_ms) o << *crossing.interpolated_source_ms; else o << "null";
+    o << ",\"sdk_frame_number\":null,\"line_id\":" << jsonQuoted(line.id)
+      << ",\"line\":[" << line.a.x << ',' << line.a.y << ',' << line.b.x << ',' << line.b.y << ']'
+      << ",\"intersection\":[" << crossing.point.x << ',' << crossing.point.y << ']'
+      << ",\"green_valid\":" << (green_valid ? "true" : "false") << ",\"green_center\":";
+    if (green_valid) o << '[' << green_center.x << ',' << green_center.y << ']'; else o << "null";
+    o << ",\"image_size\":[" << image_width << ',' << image_height << "]}";
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (events_file_.is_open()) { events_file_ << o.str() << "\n"; events_file_.flush(); }
+}
+
 void Recorder::appendDartReset()
 {
     std::lock_guard<std::mutex> session_lock(session_mutex_);
@@ -1122,6 +1148,11 @@ void Recorder::controlLoop()
             {
                 if (!dart_reset_request_) response = "{\"ok\":false,\"error\":\"飞镖跟踪器不可用\"}";
                 else { dart_reset_request_(); appendDartReset(); response = "{\"ok\":true,\"pending\":true}"; }
+            }
+            else if (cmd == "dart.simulate_fire")
+            {
+                if (!dart_simulated_fire_request_) response = "{\"ok\":false,\"error\":\"模拟事件不可用\"}";
+                else { dart_simulated_fire_request_(); response = "{\"ok\":true,\"pending\":true,\"simulated\":true}"; }
             }
             else if (cmd == "params")
             {

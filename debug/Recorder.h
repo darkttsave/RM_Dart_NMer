@@ -38,6 +38,7 @@
 
 #include "RuntimeParams.h"
 #include "tasks/dart/DartTracker.h"
+#include "tasks/dart/Observation.h"
 
 namespace webdebug
 {
@@ -133,7 +134,11 @@ public:
     /// M3：绑定运行时参数服务（控制口 params 命令 + 录制快照）
     void setRuntimeParams(RuntimeParams *params) { runtime_params_ = params; }
     void setDartResetRequest(std::function<void()> callback) { dart_reset_request_ = std::move(callback); }
+    void setDartSimulatedFireRequest(std::function<void()> callback) { dart_simulated_fire_request_ = std::move(callback); }
     void appendDartReset();
+    void appendObservation(const dartvision::ReferenceLine &line, const dartvision::Crossing &crossing,
+                           uint64_t track_id, bool green_valid, cv::Point2f green_center,
+                           int image_width, int image_height);
 
     /// M3：参数修改生效时追加一条事件到 events.jsonl（未录制时忽略）
     void appendParameterEvent(const ParamChangeEvent &event);
@@ -217,6 +222,7 @@ private:
     // 参数事件（M3）：events.jsonl 追加写入
     RuntimeParams *runtime_params_ = nullptr;
     std::function<void()> dart_reset_request_;
+    std::function<void()> dart_simulated_fire_request_;
     std::mutex events_mutex_;
     std::ofstream events_file_;
     std::string events_path_;

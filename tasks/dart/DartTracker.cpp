@@ -45,10 +45,22 @@ TrackResult DartTracker::update(const std::vector<Candidate> &candidates, uint64
             if (distance > config_.max_distance * steps) continue;
             const double vnorm = cv::norm(velocity_);
             const double dnorm = cv::norm(displacement);
-            if (vnorm >= config_.min_motion && dnorm >= config_.min_motion &&
+            if (!config_.direction_enabled && vnorm >= config_.min_motion && dnorm >= config_.min_motion &&
                 velocity_.dot(displacement) / (vnorm * dnorm) < -0.3) continue;
             const double score = cv::norm(candidate.center - predicted);
             if (score < best) { best = score; selected = &candidate; }
+        }
+        bool directionRejected = false;
+        if (selected && config_.direction_enabled) {
+            const auto count = static_cast<std::size_t>(std::max(2, config_.direction_observation_points));
+            if (result_.track_points.size() >= count - 1) {
+                const auto &start = result_.track_points[result_.track_points.size() - (count - 1)];
+                const double deltaY = selected->center.y - start.center.y;
+                if (deltaY < -std::max(0.0, config_.direction_min_displacement)) {
+                    selected = nullptr;
+                    directionRejected = true;
+                }
+            }
         }
         if (selected) {
             velocity_ = (selected->center - last.center) * (1.0f / steps);
@@ -56,7 +68,8 @@ TrackResult DartTracker::update(const std::vector<Candidate> &candidates, uint64
             result_.lost_frames = 0; result_.failure_reason.clear();
         } else {
             ++result_.lost_frames;
-            result_.failure_reason = candidates.empty() ? "no_detection" : "association_failed";
+            result_.failure_reason = directionRejected ? "direction_rejected" :
+                                     (candidates.empty() ? "no_detection" : "association_failed");
             if (result_.lost_frames > std::max(0, config_.max_lost_frames)) {
                 result_.track_valid = false; result_.track_state = "failed";
                 result_.failure_reason = "track_timeout";

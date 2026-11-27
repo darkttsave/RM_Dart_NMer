@@ -13,6 +13,14 @@ struct DetectorConfig {
     double min_area = 20, max_area = 5000;
     double min_aspect = 0.15, max_aspect = 8.0;
     int close_kernel = 3;
+    bool roi_enabled = false;
+    cv::Rect roi;
+    bool circularity_filter_enabled = false;
+    double max_circularity = 0.8; // 可选，须按实拍标定后启用
+};
+struct DetectionDiagnostics {
+    bool invalid_roi = false;
+    unsigned circularity_rejected = 0;
 };
 struct Candidate {
     cv::Point2f center;
@@ -22,7 +30,7 @@ struct Candidate {
 class DartDetector {
 public:
     explicit DartDetector(DetectorConfig config = {}) : config_(std::move(config)) {}
-    std::vector<Candidate> detect(const cv::Mat &image) const;
+    std::vector<Candidate> detect(const cv::Mat &image, DetectionDiagnostics *diagnostics = nullptr) const;
 private:
     DetectorConfig config_;
 };

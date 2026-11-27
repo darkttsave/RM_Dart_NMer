@@ -12,6 +12,9 @@ struct TrackerConfig {
     double min_motion = 4.0;
     int max_lost_frames = 5;
     int max_points = 100;
+    bool direction_enabled = false;
+    int direction_observation_points = 4;
+    double direction_min_displacement = 4.0;
 };
 struct TrackPoint {
     uint64_t frame_id = 0;

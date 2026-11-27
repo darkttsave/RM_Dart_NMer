@@ -12,7 +12,7 @@ ID_RE = re.compile(r'^EXP-[0-9a-f]{12}$')
 SECTIONS = {'environment', 'vision', 'control', 'mechanical', 'conclusion'}
 SHOT_FIELDS = {'dart_id', 'shot_number', 'fixed_compensation', 'compensation_applied',
                'green_center', 'target_yaw', 'actual_yaw', 'image_intersection',
-               'image_reference', 'landing_offset', 'landing_reference', 'distance', 'hit', 'anomaly'}
+               'image_reference', 'landing_offset', 'landing_reference', 'distance', 'hit', 'anomaly', 'observation'}
 MAX_FILE = 2 * 1024 * 1024
 
 
@@ -50,8 +50,19 @@ def validate(data):
     if not isinstance(shots, list) or len(shots) > 1000:
         raise ValueError('发射明细格式错误')
     for shot in shots:
-        if not isinstance(shot, dict) or set(shot) - SHOT_FIELDS or any(not isinstance(v, str) or len(v) > 1000 for v in shot.values()):
+        if not isinstance(shot, dict) or set(shot) - SHOT_FIELDS:
             raise ValueError('发射明细包含无效字段')
+        for key, value in shot.items():
+            if key == 'observation':
+                if not isinstance(value, dict) or len(json.dumps(value, ensure_ascii=False)) > 12000:
+                    raise ValueError('观测数据格式错误')
+                if set(value) != {'session', 'event'} or not isinstance(value['session'], str) or not isinstance(value['event'], dict):
+                    raise ValueError('观测数据必须指定录像及事件')
+                event = value['event']
+                if event.get('type') != 'dart_reference_crossing' or event.get('feature') != 'bbox_center':
+                    raise ValueError('观测事件类型无效')
+            elif not isinstance(value, str) or len(value) > 1000:
+                raise ValueError('发射明细包含无效字段')
     sessions = data.get('sessions', [])
     if not isinstance(sessions, list) or len(sessions) > 100 or any(not isinstance(s, str) or not re.fullmatch(r'[\w.\-]{1,150}', s) or s in ('.', '..') for s in sessions):
         raise ValueError('录像会话编号无效')

@@ -292,7 +292,7 @@ def experiment_sessions():
     try:
         with urlopen(url, timeout=2) as response:
             data = json.load(response)
-        return jsonify(ok=True, sessions=[{k: s.get(k) for k in ("session", "started_at_wall", "status", "config_snapshot", "events_available")}
+        return jsonify(ok=True, sessions=[{k: s.get(k) for k in ("session", "started_at_wall", "status", "config_snapshot", "events_available", "events")}
                                           for s in data.get("sessions", [])])
     except (OSError, ValueError):
         return jsonify(ok=False, error="回放服务未连接，已关联的录像仍保留"), 503
@@ -323,16 +323,31 @@ def save_experiment(store, record_id=None):
     try:
         payload = request.get_json(silent=True)
         # Validate only newly added links; old links remain editable if playback is offline.
-        old_sessions = set(store.read(record_id).get("sessions", [])) if record_id else set()
+        previous = store.read(record_id) if record_id else {}
+        old_sessions = set(previous.get("sessions", []))
+        old_observations = [shot.get("observation") for shot in previous.get("shots", []) if isinstance(shot, dict)]
+        new_observations = []
         new_sessions = set(payload.get("sessions", [])) - old_sessions if isinstance(payload, dict) and isinstance(payload.get("sessions", []), list) else set()
-        if new_sessions:
+        if isinstance(payload, dict) and isinstance(payload.get("shots", []), list):
+            for shot in payload.get("shots", []):
+                if isinstance(shot, dict) and isinstance(shot.get("observation"), dict):
+                    if shot["observation"].get("session") not in payload.get("sessions", []):
+                        return jsonify(ok=False, error="发射观测引用的录像未关联"), 400
+                    if shot["observation"] not in old_observations:
+                        new_observations.append(shot["observation"])
+        if new_sessions or new_observations:
             result = experiment_sessions()
             response, status = result if isinstance(result, tuple) else (result, 200)
             if status != 200:
                 return jsonify(ok=False, error="回放服务未连接，无法验证新增录像"), 503
-            available = {s["session"] for s in response.get_json()["sessions"]}
-            if new_sessions - available:
+            sessions = response.get_json()["sessions"]
+            available = {s["session"]: s for s in sessions}
+            if new_sessions - set(available):
                 return jsonify(ok=False, error="录像会话不存在"), 400
+            for obs in new_observations:
+                session = available.get(obs.get("session"), {})
+                if obs.get("event") not in (session.get("events") or []):
+                    return jsonify(ok=False, error="录像中的观测事件不存在或已变化"), 400
         return jsonify(ok=True, record=store.save(payload, record_id))
     except Conflict as error:
         return jsonify(ok=False, error=str(error)), 409
@@ -500,6 +515,11 @@ def api_params():
     if cmd == "save":
         return jsonify(recorder_command("params.save", control_port))
     return jsonify({"ok": False, "error": "cmd 必须是 apply / save"}), 400
+
+
+@app.route("/api/dart/simulate-fire", methods=["POST"])
+def api_dart_simulate_fire():
+    return jsonify(recorder_command("dart.simulate_fire", app.config.get("RECORDER_CONTROL_PORT", DEFAULT_CONTROL_PORT)))
 
 
 @app.route("/api/dart/reset", methods=["POST"])

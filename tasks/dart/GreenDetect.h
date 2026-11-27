@@ -92,6 +92,13 @@ public:
     void setTurnThreshold(float threshold) { turnThreshold_ = threshold; }
     void setRadiusFilter(int minRadius, int maxRadius) { minRadius_ = minRadius; maxRadius_ = maxRadius; }
     void setBrightThresh(int v) { brightThresh_ = v; }
+    void setRoi(bool enabled, const Rect &roi) {
+        if (roiEnabled_ != enabled || roi_ != roi) {
+            consecutiveFrames_ = 0; lostFrames_ = 0; tracking_ = false;
+        }
+        roiEnabled_ = enabled; roi_ = roi;
+    }
+    bool roiInvalid() const { return roiInvalid_; }
     void setGreenWeightThresh(float v) { greenWeightThresh_ = v; }
 
     void setShapeFilter(double minCircularity, double minAspectRatio, double maxAspectRatio)
@@ -135,6 +142,9 @@ private:
     void finishProfileFrame();
     bool profileEnabled_ = false;
     bool drawDebug_ = true;
+    bool roiEnabled_ = false;
+    bool roiInvalid_ = false;
+    Rect roi_;
     std::array<double, 8> profileTimes_{};
     std::array<std::vector<double>, 8> profileSamples_{};
     std::chrono::steady_clock::time_point profileStart_ = std::chrono::steady_clock::now();

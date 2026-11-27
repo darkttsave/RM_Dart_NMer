@@ -158,7 +158,32 @@ GreenDetect::TargetInfo GreenDetect::detectGreenTarget(const Mat &image)
     if (drawDebug_) { StageTimer t(profileEnabled_, profileTimes_[7]); debugImage_ = image.clone(); }
     else debugImage_.release();
 
-    Mat greenBinary = preprocessGreenChannel(image);
+    roiInvalid_ = false;
+    Mat greenBinary;
+    if (roiEnabled_)
+    {
+        const auto &r = roi_;
+        const bool valid = r.x >= 0 && r.y >= 0 && r.width > 0 && r.height > 0 &&
+                           r.x < image.cols && r.y < image.rows &&
+                           r.width <= image.cols - r.x && r.height <= image.rows - r.y;
+        if (!valid)
+        {
+            // 安全失败：不输出误导性的目标或改变图像中心。
+            roiInvalid_ = true;
+            consecutiveFrames_ = 0;
+            tracking_ = false;
+            lostFrames_ = 0;
+            binaryImage_.release();
+            if (drawDebug_) cv::putText(debugImage_, "Invalid green ROI", Point(10, 30),
+                                       cv::FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 0, 255), 2);
+            return result;
+        }
+        Mat cropped = preprocessGreenChannel(image(r));
+        greenBinary = Mat::zeros(image.size(), CV_8UC1);
+        cropped.copyTo(greenBinary(r));
+        if (drawDebug_) binaryImage_ = greenBinary.clone();
+    }
+    else greenBinary = preprocessGreenChannel(image);
 
     // 判断视野内是否有绿色像素
     int greenPixels = cv::countNonZero(greenBinary);

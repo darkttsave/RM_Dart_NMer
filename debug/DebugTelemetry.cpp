@@ -419,6 +419,14 @@ bool DebugTelemetry::sendFrame(const DebugFrame &frame)
     oss << "\"green_pixels\":" << frame.green_pixels << ',';
     oss << "\"candidate_count\":" << frame.candidate_count << ',';
     const auto &dart = frame.dart_result;
+    const auto &crossing = frame.dart_crossing;
+    oss << "\"observation\":{\"feature\":\"bbox_center\",\"valid\":" << (crossing.valid ? "true" : "false")
+        << ",\"reason\":\"" << jsonEscape(crossing.reason) << "\",\"line_id\":\"" << jsonEscape(crossing.line_id)
+        << "\",\"track_id\":" << frame.dart_track_id << ",\"x\":";
+    if (crossing.valid) oss << crossing.point.x; else oss << "null";
+    oss << ",\"y\":";
+    if (crossing.valid) oss << crossing.point.y; else oss << "null";
+    oss << "},";
     oss << "\"dart\":{\"enabled\":" << (frame.dart_enabled ? "true" : "false")
         << ",\"color\":\"" << jsonEscape(frame.dart_color) << "\",\"processing_ms\":" << frame.dart_processing_ms
         << ",\"frame_id\":" << frame.dart_frame_id
